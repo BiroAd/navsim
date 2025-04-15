@@ -5,10 +5,12 @@ INSTITUTION="MUST_SET"
 COUNTRY="MUST_SET"
 
 TRAIN_TEST_SPLIT=navtest
+CHECKPOINT=/root/workdir/biroa/navsim/exp/training_ego_mlp_agent/first/checkpoints/best/best_epoch.ckpt
 
 python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_create_submission_pickle.py \
 train_test_split=$TRAIN_TEST_SPLIT \
-agent=constant_velocity_agent \
+agent=ego_status_mlp_agent \
+agent.checkpoint_path=$CHECKPOINT \
 experiment_name=submission_cv_agent \
 team_name=$TEAM_NAME \
 authors=$AUTHORS \

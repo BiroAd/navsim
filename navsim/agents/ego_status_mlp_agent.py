@@ -22,10 +22,15 @@ class EgoStatusFeatureBuilder(AbstractFeatureBuilder):
 
     def compute_features(self, agent_input: AgentInput) -> Dict[str, torch.Tensor]:
         """Inherited, see superclass."""
+        print(f"Agent_input: {agent_input}")
         ego_status = agent_input.ego_statuses[-1]
+        print(f"Ego status: {ego_status}")
         velocity = torch.tensor(ego_status.ego_velocity)
+        print(f"Velocity: {velocity}")
         acceleration = torch.tensor(ego_status.ego_acceleration)
+        print(f"Acceleration: {acceleration}")
         driving_command = torch.tensor(ego_status.driving_command)
+        print(f"Driving command: {driving_command}")
         ego_status_feature = torch.cat([velocity, acceleration, driving_command], dim=-1)
         return {"ego_status": ego_status_feature}
 
@@ -69,6 +74,7 @@ class EgoStatusMLPAgent(AbstractAgent):
         :param trajectory_sampling: trajectory sampling specification.
         """
         super().__init__(trajectory_sampling)
+        print(trajectory_sampling.num_poses)
 
         self._checkpoint_path = checkpoint_path
 

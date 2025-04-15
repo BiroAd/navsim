@@ -58,7 +58,7 @@ class TransfuserAgent(AbstractAgent):
     def get_sensor_config(self) -> SensorConfig:
         """Inherited, see superclass."""
         # NOTE: Transfuser only uses current frame (with index 3 by default)
-        history_steps = [3]
+        history_steps = [2, 3]
         return SensorConfig(
             cam_f0=history_steps,
             cam_l0=history_steps,

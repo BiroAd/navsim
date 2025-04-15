@@ -16,6 +16,8 @@ class AgentLightningModule(pl.LightningModule):
         """
         super().__init__()
         self.agent = agent
+        self.training_step_counter = 0
+        self.validation_step_counter = 0
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
@@ -24,11 +26,20 @@ class AgentLightningModule(pl.LightningModule):
         :param logging_prefix: prefix where to log step
         :return: scalar loss
         """
+        #self.trainer.loggers[0].log_metrics({"step": self.global_step})
+        #print(self.trainer.optimizers[0].param_groups[0]['lr'])
+
         features, targets = batch
         prediction = self.agent.forward(features)
         loss = self.agent.compute_loss(features, targets, prediction)
         self.log(f"{logging_prefix}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        #self.log(f"{logging_prefix}/lr", self.trainer.optimizers[0].param_groups[0]["lr"], on_step=True, on_epoch=True, prog_bar=True)
+
         return loss
+    
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+        self.log("train/lr_step", lr, on_step=True, on_epoch=False, prog_bar=False)
 
     def training_step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], batch_idx: int) -> Tensor:
         """
