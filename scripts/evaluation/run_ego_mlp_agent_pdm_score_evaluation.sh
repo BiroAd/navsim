@@ -1,5 +1,4 @@
-TRAIN_TEST_SPLIT=navtest
-#CHECKPOINT=/path/to/ego_status_mlp.ckpt
+TRAIN_TEST_SPLIT=warmup_two_stage
 CHECKPOINT=/root/workdir/biroa/navsim/exp/training_ego_mlp_agent/first/checkpoints/best/best_epoch.ckpt
 export CUDA_VISIBLE_DEVICES=3
 
