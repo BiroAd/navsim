@@ -16,8 +16,6 @@ class AgentLightningModule(pl.LightningModule):
         """
         super().__init__()
         self.agent = agent
-        self.training_step_counter = 0
-        self.validation_step_counter = 0
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
