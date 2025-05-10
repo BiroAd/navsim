@@ -1,6 +1,5 @@
 from enum import IntEnum
 from typing import Any, Dict, List, Tuple
-from PIL import Image
 
 import cv2
 import numpy as np
@@ -39,32 +38,17 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
     def compute_features(self, agent_input: AgentInput) -> Dict[str, torch.Tensor]:
         """Inherited, see superclass."""
         features = {}
-        image_file_name = 'saved_image.png'
 
         features["camera_feature"] = self._get_camera_feature(agent_input)
         if not self._config.latent:
             features["lidar_feature"] = self._get_lidar_feature(agent_input)
         features["status_feature"] = torch.concatenate(
             [
-                torch.tensor(agent_input.ego_statuses[-2].driving_command, dtype=torch.float32),
-                torch.tensor(agent_input.ego_statuses[-2].ego_velocity, dtype=torch.float32),
-                torch.tensor(agent_input.ego_statuses[-2].ego_acceleration, dtype=torch.float32),
+                torch.tensor(agent_input.ego_statuses[-1].driving_command, dtype=torch.float32),
+                torch.tensor(agent_input.ego_statuses[-1].ego_velocity, dtype=torch.float32),
+                torch.tensor(agent_input.ego_statuses[-1].ego_acceleration, dtype=torch.float32),
             ],
         )
-
-        if features['status_feature'][3] == 1.0:
-            camera_tensor = features["camera_feature"]
-    
-            # Convert from (C, H, W) to (H, W, C) format
-            camera_array = camera_tensor.permute(1, 2, 0).numpy()
-            
-            # Scale back from [0, 1] float to [0, 255] uint8
-            camera_array = (camera_array * 255).astype(np.uint8)
-            
-            # Now create the image
-            image = Image.fromarray(camera_array)
-            image.save(image_file_name)
-            print(f"Image saved as {image_file_name}")
 
         return features
 
@@ -75,7 +59,7 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
         :return: stitched front view image as torch tensor
         """
 
-        cameras = agent_input.cameras[-2]
+        cameras = agent_input.cameras[-1]
 
         # Crop to ensure 4:1 aspect ratio
         l0 = cameras.cam_l0.image[28:-28, 416:-416]
@@ -84,11 +68,8 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
 
         # stitch l0, f0, r0 images
         stitched_image = np.concatenate([l0, f0, r0], axis=1)
-        print(stitched_image.shape)
         resized_image = cv2.resize(stitched_image, (1024, 256))
-        print(resized_image.shape)
         tensor_image = transforms.ToTensor()(resized_image)
-        print(tensor_image.shape)
 
         return tensor_image
 
@@ -100,7 +81,7 @@ class TransfuserFeatureBuilder(AbstractFeatureBuilder):
         """
 
         # only consider (x,y,z) & swap axes for (N,3) numpy array
-        lidar_pc = agent_input.lidars[-2].lidar_pc[LidarIndex.POSITION].T
+        lidar_pc = agent_input.lidars[-1].lidar_pc[LidarIndex.POSITION].T
 
         # NOTE: Code from
         # https://github.com/autonomousvision/carla_garage/blob/main/team_code/data.py#L873

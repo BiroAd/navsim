@@ -16,9 +16,33 @@ def vision_llm_loss(targets: Dict[str, torch.Tensor], predictions: Dict[str, tor
     :param config: global VisionLLM config
     :return: combined loss value
     """
+    '''pos_pred = predictions["trajectory"][:, :, :2]
+    theta_pred = predictions["trajectory"][:, :, 2] 
 
-    #print(f"Predictions: {predictions['trajectory'].shape}")
-    #print(f"Targets: {targets['trajectory'].shape}")
+    pos_gt = targets["trajectory"][:, :, :2]
+    theta_gt = targets["trajectory"][:, :, 2]
+
+    #pos loss
+    pos_loss = F.smooth_l1_loss(pos_pred, pos_gt, reduction='none', beta=2.0)  # [B, T, 2]
+    pos_loss = pos_loss.sum(dim=-1)
+
+    #orientation loss
+    theta_pred = torch.remainder(theta_pred + torch.pi, 2 * torch.pi) - torch.pi
+    theta_gt = torch.remainder(theta_gt + torch.pi, 2 * torch.pi) - torch.pi    
+    theta_pred_vec = torch.stack([torch.cos(theta_pred), torch.sin(theta_pred)], dim=-1)
+    theta_gt_vec = torch.stack([torch.cos(theta_gt), torch.sin(theta_gt)], dim=-1)
+
+    cos_sim = F.cosine_similarity(theta_pred_vec, theta_gt_vec, dim=-1) 
+    theta_loss = 1.0 - cos_sim
+
+    total_pos_loss = pos_loss.mean()
+    total_theta_loss = theta_loss.mean()
+
+    lambda_pos = config.lambda_pos
+    lambda_theta = config.lambda_theta
+
+    trajectory_loss = lambda_pos * total_pos_loss + lambda_theta * total_theta_loss
+    return trajectory_loss, {'pos_loss': total_pos_loss.item(), 'theta_loss': total_theta_loss.item()}'''
     trajectory_loss = F.l1_loss(predictions["trajectory"], targets["trajectory"])
     '''agent_class_loss, agent_box_loss = _agent_loss(targets, predictions, config)
     bev_semantic_loss = F.cross_entropy(predictions["bev_semantic_map"], targets["bev_semantic_map"].long())

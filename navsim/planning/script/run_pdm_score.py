@@ -6,6 +6,7 @@ from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
+import time
 
 import hydra
 import numpy as np
@@ -88,11 +89,15 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[p
         try:
             metric_cache = metric_cache_loader.get_from_token(token)
             agent_input = scene_loader.get_agent_input_from_token(token)
+            #print(f"Time before forward: {time.time()}")
             if agent.requires_scene:
                 scene = scene_loader.get_scene_from_token(token)
                 trajectory = agent.compute_trajectory(agent_input, scene)
             else:
                 trajectory = agent.compute_trajectory(agent_input)
+            #print(f"Time2 after forward: {time.time()}")
+
+            #print(f"Time before pdm score: {time.time()}")
 
             score_row_stage_one, ego_simulated_states = pdm_score(
                 metric_cache=metric_cache,
@@ -102,6 +107,8 @@ def run_pdm_score(args: List[Dict[str, Union[List[str], DictConfig]]]) -> List[p
                 scorer=scorer,
                 traffic_agents_policy=traffic_agents_policy_stage_one,
             )
+
+            #print(f"Time after pdm score: {time.time()}")
             score_row_stage_one["valid"] = True
             score_row_stage_one["log_name"] = metric_cache.log_name
             score_row_stage_one["frame_type"] = metric_cache.scene_type

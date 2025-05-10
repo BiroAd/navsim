@@ -5,6 +5,9 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 import torch
+import torchvision.transforms as T
+from torchvision.transforms.functional import InterpolationMode
+
 from nuplan.common.actor_state.oriented_box import OrientedBox
 from nuplan.common.actor_state.state_representation import StateSE2
 from nuplan.common.actor_state.tracked_objects_types import TrackedObjectType
@@ -13,6 +16,8 @@ from nuplan.planning.simulation.trajectory.trajectory_sampling import Trajectory
 from shapely import affinity
 from shapely.geometry import LineString, Polygon
 from torchvision import transforms
+from PIL import Image
+import torch.nn.functional as F
 
 from navsim.agents.vision_llm.vision_llm_config import VisionLLMConfig
 from navsim.common.dataclasses import AgentInput, Annotations, Scene
@@ -39,25 +44,25 @@ class VisionLLMFeatureBuilder(AbstractFeatureBuilder):
         """Inherited, see superclass."""
         features = {}
 
-        #features["camera_feature"] = self._get_camera_feature(agent_input)
-        number = torch.argmax(torch.tensor(agent_input.ego_statuses[-1].ego_velocity, dtype=torch.int16))
-        text = 'left' if number == 0 else 'straight' if number == 1 else 'right' if number == 2 else 'unknown command'
-        features["prompt"] = (
-        f"You are an Autonomous Driving AI assistant. You receive status information that "
-        + f"consists of the ego vehicle's velocity, acceleration, and driving command. Your task is to "
-        + f"analyze these statuses and provide insights or recommended actions based on this data. "
-        + f"The current ego vehicle velocity is {agent_input.ego_statuses[-1].ego_velocity}, and the "
-        + f"acceleration is {agent_input.ego_statuses[-1].ego_acceleration}. The ego vehicle is currently "
-        + f"going {text}."
-    )
+        features["camera_feature"] = self._get_camera_feature(agent_input)
+        features['velocity'] = torch.tensor(agent_input.ego_statuses[-1].ego_velocity, dtype=torch.float32)
+        features['acceleration'] = torch.tensor(agent_input.ego_statuses[-1].ego_acceleration, dtype=torch.float32)
+        features['driving_command'] = torch.argmax(torch.tensor(agent_input.ego_statuses[-1].driving_command, dtype=torch.int16))
+        #print(f"Driving command: {features['driving_command']}")
 
-        '''features["status_feature"] = torch.concatenate(
-            [
-                torch.tensor(agent_input.ego_statuses[-1].driving_command, dtype=torch.float32),
-                torch.tensor(agent_input.ego_statuses[-1].ego_velocity, dtype=torch.float32),
-                torch.tensor(agent_input.ego_statuses[-1].ego_acceleration, dtype=torch.float32),
-            ],
-        )'''
+        '''if features['driving_command'] == 3:
+            image_file_name = "camera_image.png"
+    
+            # Convert from (C, H, W) to (H, W, C) format
+            camera_array = camera_tensor.permute(1, 2, 0).numpy()
+            
+            # Scale back from [0, 1] float to [0, 255] uint8
+            camera_array = (camera_array * 255).astype(np.uint8)
+            
+            # Now create the image
+            image = Image.fromarray(camera_array)
+            image.save(image_file_name)
+            print(f"Image saved as {image_file_name}")'''
 
         return features
 
@@ -70,23 +75,125 @@ class VisionLLMFeatureBuilder(AbstractFeatureBuilder):
 
         cameras = agent_input.cameras[-1]
 
-        # Crop to ensure 4:1 aspect ratio
-        l0 = cameras.cam_l0.image[28:-28, 416:-416]
-        f0 = cameras.cam_f0.image[28:-28]
-        r0 = cameras.cam_r0.image[28:-28, 416:-416]
+        def crop(img):
+            return img[316:-316, 512:-512]
 
-        l2 = cameras.cam_l2.image[28:-28, 416:-416]
-        b0 = cameras.cam_b0.image[28:-28]
-        r2 = cameras.cam_r2.image[28:-28, 416:-416]
+        # Crop to ensure 4:1 aspect ratio
+
+        l0 = crop(cameras.cam_l0.image)
+        f0 = crop(cameras.cam_f0.image)
+        r0 = crop(cameras.cam_r0.image)
+
+        l2 = crop(cameras.cam_l2.image)
+        b0 = crop(cameras.cam_b0.image)
+        r2 = crop(cameras.cam_r2.image)
 
         # stitch l0, f0, r0 images
         stitched_image1 = np.concatenate([l0, f0, r0], axis=1)
         stitched_image2 = np.concatenate([l2, b0, r2], axis=1)
         stitched_image = np.concatenate([stitched_image1, stitched_image2], axis=0)
-        resized_image = cv2.resize(stitched_image, (1024, 512))
-        tensor_image = transforms.ToTensor()(resized_image)
 
-        return tensor_image
+
+        #stitched_image = cv2.cvtColor(stitched_image, cv2.COLOR_BGR2RGB)
+
+        #stitched_tensor = torch.from_numpy(stitched_image).permute(2, 0, 1).float() / 255.0
+        #print(tensor_image.shape)
+
+        resized_image = cv2.resize(stitched_image, (672, 224), interpolation=cv2.INTER_LANCZOS4)
+        resized_image_pil = Image.fromarray(cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)) 
+        #tensor_image = transforms.ToTensor()(resized_image_pil)
+
+        transform = self.build_transform(input_size=112)
+        #images = self.fast_dynamic_preprocess(stitched_tensor, image_size=448, use_thumbnail=True)
+        images = self.dynamic_preprocess(resized_image_pil, image_size=112, use_thumbnail=True)
+        #pixel_values = transform(images)'''
+        pixel_values = [transform(image) for image in images]
+        pixel_values = torch.stack(pixel_values)
+        print(f"Pixel values shape: {pixel_values.shape}")
+
+        return pixel_values
+        #print(f"Stitched image shape: {stitched_image.shape}")
+        #return stitched_image
+    
+    def fast_dynamic_preprocess(self, stitched_tensor, image_size=448, use_thumbnail=False):
+        """
+        Fast tensor slicing into blocks without any Python for-loop.
+        """
+        # stitched_tensor: (C, H, W)
+        C, H, W = stitched_tensor.shape
+        num_blocks_w, num_blocks_h = 6, 2  # target aspect ratio width:height
+
+        block_width = image_size
+        block_height = image_size
+
+
+        # First, reshape into blocks
+        stitched_tensor = stitched_tensor[:, :block_height * num_blocks_h, :block_width * num_blocks_w]
+        blocks = stitched_tensor.view(
+            C,
+            num_blocks_h, block_height,
+            num_blocks_w, block_width
+        )  # Shape: (C, num_blocks_h, block_height, num_blocks_w, block_width)
+
+        # Now permute to group the blocks nicely: (num_blocks_h, num_blocks_w, C, block_height, block_width)
+        blocks = blocks.permute(1, 3, 0, 2, 4)
+
+        # Merge first two dimensions (flatten block grid)
+        blocks = blocks.reshape(-1, C, block_height, block_width)  # (12, 3, 448, 448)
+
+        # Optional thumbnail
+        if use_thumbnail:
+            thumbnail_img = F.interpolate(
+                stitched_tensor.unsqueeze(0),  # (1, 3, H, W)
+                size=(image_size, image_size),
+                mode="bilinear",
+                align_corners=False
+            ).squeeze(0)  # (3, 448, 448)
+            blocks = torch.cat([blocks, thumbnail_img.unsqueeze(0)], dim=0)  # (13, 3, 448, 448)
+
+        return blocks  # shape (12, 3, 448, 448) or (13, 3, 448, 448)
+    
+
+    def build_transform(self, input_size):
+        IMAGENET_MEAN = (0.485, 0.456, 0.406)
+        IMAGENET_STD = (0.229, 0.224, 0.225)
+
+        MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
+        transform = T.Compose([
+            T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
+            #T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+            T.ToTensor(),
+            T.Normalize(mean=MEAN, std=STD)
+        ])
+        return transform
+    
+    
+    def dynamic_preprocess(self, image, min_num=1, max_num=12, image_size=448, use_thumbnail=False):
+        target_aspect_ratio = (6, 2)
+
+        # calculate the target width and height
+        target_width = image_size * target_aspect_ratio[0]
+        #target_height = image_size * target_aspect_ratio[1]
+        blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+
+        # resize the image
+        #resized_img = image.resize((target_width, target_height))
+        processed_images = []
+        for i in range(blocks):
+            box = (
+                (i % (target_width // image_size)) * image_size,
+                (i // (target_width // image_size)) * image_size,
+                ((i % (target_width // image_size)) + 1) * image_size,
+                ((i // (target_width // image_size)) + 1) * image_size
+            )
+            # split the image
+            split_img = image.crop(box)
+            processed_images.append(split_img)
+        assert len(processed_images) == blocks
+        if use_thumbnail and len(processed_images) != 1:
+            thumbnail_img = image.resize((image_size, image_size))
+            processed_images.append(thumbnail_img)
+        return processed_images
 
 
 class VisionLLMTargetBuilder(AbstractTargetBuilder):

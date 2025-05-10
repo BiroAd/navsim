@@ -13,7 +13,10 @@ class VisionLLMConfig:
     #architecture: str = "Qwen/Qwen2.5-VL-3B-Instruct"
     architecture: str = "OpenGVLab/InternVL3-1B"
 
-    total_training_steps: int = 2660
+    total_training_steps: int = 21278
+
+    lambda_pos: float = 1.0
+    lambda_theta: float = 1.0
 
     latent: bool = False
     latent_rad_thresh: float = 4 * np.pi / 9

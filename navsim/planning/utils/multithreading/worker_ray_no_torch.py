@@ -45,6 +45,7 @@ def initialize_ray(
 
     # Read number of CPU cores on current machine
     number_of_cpus_per_node = threads_per_node if threads_per_node else cpu_count(logical=True)
+    #number_of_cpus_per_node = 10
     number_of_gpus_per_node = 0  # no cuda support
     if not number_of_gpus_per_node:
         logger.info("Not using GPU in ray")

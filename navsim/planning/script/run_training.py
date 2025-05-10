@@ -17,6 +17,8 @@ from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 
+from pytorch_lightning.callbacks import EarlyStopping
+
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "config/training"
@@ -154,11 +156,20 @@ def main(cfg: DictConfig) -> None:
         mode="min",
     )
 
+    early_stopping = EarlyStopping(
+        monitor="val/loss",
+        patience=5,  # Number of epochs with no improvement after which training will stop
+        verbose=True,
+        mode="min"
+    )
+
+    # Include early_stopping in your callbacks list
     trainer = pl.Trainer(
         **cfg.trainer.params,
-        callbacks=[best_model_checkpoint, epoch_checkpoint] + agent.get_training_callbacks(),
+        callbacks=[best_model_checkpoint, epoch_checkpoint, early_stopping] + agent.get_training_callbacks(),
         logger=wandb_logger,
     )
+
 
     logger.info("Starting Training")
     trainer.fit(

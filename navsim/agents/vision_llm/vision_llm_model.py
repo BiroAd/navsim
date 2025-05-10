@@ -1,3 +1,4 @@
+import warnings
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor, AutoModel
 from typing import Dict
 import numpy as np
@@ -7,30 +8,119 @@ from nuplan.planning.simulation.trajectory.trajectory_sampling import Trajectory
 from navsim.agents.vision_llm.vision_llm_config import VisionLLMConfig
 from navsim.common.enums import StateSE2Index
 from navsim.agents.vision_llm.vision_llm_features import BoundingBox2DIndex
+from navsim.agents.vision_llm.conversation import get_conv_template
+
+import time
+from PIL import Image
+from torch.amp import autocast
 
 class VisionLLMModel(nn.Module):
     def __init__(self, trajectory_sampling: TrajectorySampling, config: VisionLLMConfig):
         super().__init__()
 
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    
         # Load the model and tokenizer
         self.model = AutoModel.from_pretrained(
             config.architecture,
             torch_dtype=torch.float32,
-            #device_map="auto",
+            device_map={"": self.device},
             trust_remote_code=True,
             low_cpu_mem_usage=True,
         )
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.architecture, trust_remote_code=True)
 
-        #print(f"Model: {self.model}")
-        #print(f"Tokenizer: {self.tokenizer}")
+        self.ego_tokens_start = "<ego>"
+        self.ego_tokens_end = "</ego>"
+        self.ego_context_tokens = "<EGO_CONTEXT>"
+
+        special_tokens_dict = {'additional_special_tokens': [self.ego_tokens_start, self.ego_tokens_end, self.ego_context_tokens]}
+        num_added_tokens = self.tokenizer.add_special_tokens(special_tokens_dict)
+
+        old_embeddings = self.model.get_input_embeddings()
+        new_embeddings = torch.nn.Embedding(len(self.tokenizer), old_embeddings.embedding_dim)
+        
+        new_embeddings.weight.data[:old_embeddings.weight.size(0)] = old_embeddings.weight.data
+        self.model.set_input_embeddings(new_embeddings)
+
+        self.template = get_conv_template(self.model.template)
+
+        '''self.template.system_message = (
+            "You are an AI assistant for autonomous driving, specialized in trajectory planning. "
+            "You receive six images covering a 360° view around the ego vehicle, arranged as: "
+            "Top row: FRONT LEFT, FRONT, FRONT RIGHT; Bottom row: BACK LEFT, BACK, BACK RIGHT. "
+            "You also receive the vehicle’s status: velocity, acceleration, and current driving command. "
+            "Analyze the environment and dynamics to generate a safe, feasible trajectory. "
+            "Adjust for obstacles, occlusions, or risks to ensure safety and efficiency."
+        )'''
+
+        '''self.template.system_message = (
+            "You are an AI assistant specialized in trajectory planning for autonomous driving. "
+            "You receive six camera images covering a full 360° view around the ego vehicle, organized as follows: "
+            "Top row (left to right): FRONT LEFT, FRONT, FRONT RIGHT; "
+            "Bottom row (left to right): BACK LEFT, BACK, BACK RIGHT. "
+            "You also receive the ego vehicle’s status data, including velocity, acceleration, and the current driving command. "
+            "Your task is to analyze the surroundings and vehicle dynamics to generate a set of safe, feasible trajectory waypoints for the ego vehicle. "
+            "Adjust the trajectory as needed to avoid obstacles, handle occlusions, and maintain safe and efficient driving behavior."
+        )'''
+
+        self.template.system_message = (
+            "You are an Autonomous Driving AI assistant. You receive an image that consists "
+            "of six surrounding camera views. The layout is as follows: The first row contains three images: "
+            "FRONT LEFT, FRONT, FRONT RIGHT. The second row contains three images: BACK LEFT, "
+            "BACK, BACK RIGHT. Your task is to analyze these images and provide insights or actions based on "
+            "the visual data."
+        )
+
+        '''self.template.system_message = (
+            "You are an AI assistant for autonomous driving, focused on trajectory planning. "
+            "You receive six 360° images around the vehicle: "
+            "FRONT LEFT, FRONT, FRONT RIGHT (top row) and BACK LEFT, BACK, BACK RIGHT (bottom row), "
+            "plus velocity, acceleration, and driving command. "
+            "Generate a safe, feasible trajectory, accounting for obstacles, occlusions, and risks."
+        )'''
+
+        question = ("current images: <image>, current statuses: <EGO>.\nWhat should be the next trajectory waypoints for the ego vehicle?")
+
+        self.template.append_message(self.template.roles[0], question)
+        self.template.append_message(self.template.roles[1], None)
+        print(f"Prompt template: {self.template}")
+        
+
         self.visual = self.model.vision_model
         self.language = self.model.language_model.model
         self.mlp = self.model.mlp1
-        # a tokeneket beadjuk a pixel_values értékekkel együtt.
 
         hidden_dim = self.language.norm.weight.shape[0]
+
+        self.token_type_embed = nn.Embedding(3, hidden_dim).to(self.model.device)
+
+        '''self.encode_ego = EgoContinuousEncoder(input_dim=4, hidden_dim=hidden_dim).to(self.model.device)
+        self.encode_direction = DirectionEmbedding(num_directions=4, hidden_dim=hidden_dim).to(self.model.device)
+
+        self.ego_fusion_mlp = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        ).to(self.model.device)'''
+
+        self.velocity_encoder = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim)
+        ).to(self.model.device)
+        
+        self.acceleration_encoder = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim)
+        ).to(self.model.device)
+        
+        self.direction_embedding = nn.Embedding(4, hidden_dim).to(self.model.device)
 
         self.agent_head = AgentHead(
             num_agents=config.num_bounding_boxes,
@@ -38,10 +128,19 @@ class VisionLLMModel(nn.Module):
             d_model=config.tf_d_model,
         ).to(self.model.device)
 
-        self.trajectory_head = TrajectoryHead(
+        '''self.trajectory_head = TrajectoryHead(
             num_poses=trajectory_sampling.num_poses,
             d_ffn=config.tf_d_model,
             d_model=hidden_dim
+        ).to(self.model.device)'''
+
+        self.trajectory_head = WaypointTransformerHead(
+            vlm_dim=hidden_dim,
+            traj_dim=3,
+            num_waypoints=trajectory_sampling.num_poses,
+            model_dim=hidden_dim,
+            num_layers=4,
+            nhead=4
         ).to(self.model.device)
 
 
@@ -52,44 +151,249 @@ class VisionLLMModel(nn.Module):
             width=config.bev_pixel_width // config.bev_down_sample_factor,
         ).to(self.model.device)
 
-        self.model.gradient_checkpointing_enable()
 
-    def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        '''vision_outputs = None
-        if pixel_values is not None:
-            vision_outputs = self.visual(pixel_values)'''
+        self.visual.gradient_checkpointing_enable()
+        self.language.gradient_checkpointing_enable()
+        self.embedding = self.language.embed_tokens.to(self.model.device)
+
+
+    def forward(self, features: Dict[str, torch.Tensor], teacher_forcing_seq=None, teacher_forcing_ratio=1.0) -> Dict[str, torch.Tensor]:
+            images = features["camera_feature"]
+
+            #print out one image
+            b, p, c, h, w = images.shape
+
+            resized_images = images.view(b*p, c, h, w)
+
+            feature = self.extract_feature(resized_images)
+            feature = feature.view(b, -1, feature.shape[-1])
+
+            velocity = features["velocity"]
+            direction = features["driving_command"]
+            acceleration = features["acceleration"]
+
+            '''fuse = torch.cat([velocity, acceleration], dim=-1)
+            enc_velocity = self.encode_ego(fuse)
+            enc_direction = self.encode_direction(direction)
+
+            ego_concat = torch.cat([enc_velocity, enc_direction], dim=-1)
+            ego_embeds = self.ego_fusion_mlp(ego_concat)
+            print(f"Ego token: {ego_embeds.shape}")'''
+
+            enc_velocity = self.velocity_encoder(velocity).unsqueeze(dim=1)
+            enc_acceleration = self.acceleration_encoder(acceleration).unsqueeze(dim=1)
+            enc_direction = self.direction_embedding(direction).unsqueeze(dim=1)
+            ego_embeds = torch.cat([enc_velocity, enc_acceleration, enc_direction], dim=1)
+            
+            batch_size = ego_embeds.shape[0]
+
+            query = self.template.get_prompt()
+
+            ego_tokens = self.ego_tokens_start + self.ego_context_tokens * ego_embeds.shape[1] + self.ego_tokens_end
+            image_tokens = '<img>' + '<IMG_CONTEXT>' * feature.shape[1] + '</img>'
+
+            query = query.replace('<image>', image_tokens)
+            query = query.replace('<EGO>', ego_tokens)
+
+            tokenized_inputs = self.tokenizer(query, return_tensors="pt", padding=True).to(self.model.device)
+
+            input_ids = tokenized_inputs['input_ids'].expand(batch_size, -1)
+
+            attention_mask = tokenized_inputs['attention_mask'].expand(batch_size, -1)
+
+            ego_token_id = self.tokenizer.convert_tokens_to_ids("<EGO_CONTEXT>")
+            ego_positions = (input_ids == ego_token_id)
+
+            image_token_id = self.tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+            image_positions = (input_ids == image_token_id)
+
+            text_len = input_ids.shape[1]
+
+            token_type_ids = torch.zeros((batch_size, text_len), dtype=torch.int32, device=input_ids.device)
+            token_type_ids[ego_positions] = 1
+            token_type_ids[image_positions] = 2
+            token_type_embeds = self.token_type_embed(token_type_ids)
+
+            #embedding = self.language.embed_tokens#.to(self.model.device)
+
+            text_embeds = self.embedding(input_ids)
+            text_embeds[ego_positions] = ego_embeds.reshape(-1, ego_embeds.shape[-1]).to(text_embeds.dtype)
+            text_embeds[image_positions] = feature.reshape(-1, feature.shape[-1]).to(text_embeds.dtype)
+
+            all_embeds = text_embeds + token_type_embeds
+
+            outputs = self.language.forward(
+                inputs_embeds=all_embeds,
+                attention_mask=attention_mask,
+                past_key_values=None,
+                use_cache=False,
+            )
+
+            hidden_states = outputs.last_hidden_state
+            #hidden_states = hidden_states[:, -1, :]
+            #print(f"Hidden state: {hidden_states.shape}")
+            #last_hidden_state = hidden_states[:, -1, :]
+
+            #bev_semantic_map = self.bev_semantic_head(last_hidden_state)
+
+            #output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
+
+            output: Dict[str, torch.Tensor] = {}
+            s0 = torch.Tensor([0, 0, 0]).expand(batch_size, -1).to(self.model.device)
+            trajectory_outputs = self.trajectory_head(s0, hidden_states, teacher_forcing_seq=teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
+            #print(f"Trajectory outputs: {trajectory_outputs['trajectory'].shape}")
+            output.update(trajectory_outputs)
+
+            #del token_type_ids, token_type_embeds, text_embeds, all_embeds, outputs, feature, hidden_states, ego_embeds, resized_images
+            #del input_ids, attention_mask, image_positions, ego_positions
+            #torch.cuda.empty_cache()
+
+            #agent_outputs = self.agent_head(hidden_states)
+            #output.update(agent_outputs)
+
+            return output
+
+    def extract_feature(self, pixel_values):
+        if self.model.select_layer == -1:
+            vit_embeds = self.visual(
+                pixel_values=pixel_values,
+                output_hidden_states=False,
+                return_dict=True).last_hidden_state
+        else:
+            vit_embeds = self.visual(
+                pixel_values=pixel_values,
+                output_hidden_states=True,
+                return_dict=True).hidden_states[self.model.select_layer]
+        vit_embeds = vit_embeds[:, 1:, :]
+
+        h = w = int(vit_embeds.shape[1] ** 0.5)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], h, w, -1)
+        vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.model.downsample_ratio)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
+        vit_embeds = self.mlp(vit_embeds)
+        return vit_embeds
+
+    def pixel_shuffle(self, x, scale_factor=0.5):
+        n, w, h, c = x.size()
+        # N, W, H, C --> N, W, H * scale, C // scale
+        x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+        # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
+        x = x.permute(0, 2, 1, 3).contiguous()
+        # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
+        x = x.view(n, int(h * scale_factor), int(w * scale_factor),
+                   int(c / (scale_factor * scale_factor)))
+        if self.model.ps_version == 'v1':
+            warnings.warn("In ps_version 'v1', the height and width have not been swapped back, "
+                          'which results in a transposed image.')
+        else:
+            x = x.permute(0, 2, 1, 3).contiguous()
+        return x
+    
+class EgoContinuousEncoder(nn.Module):
+    def __init__(self, input_dim=4, hidden_dim=4096):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.act = nn.GELU()
         
-        prompt = features["prompt"]
-        tokenized_inputs = self.tokenizer(prompt, return_tensors="pt", padding=True)
-        input_ids = tokenized_inputs.input_ids.to(self.model.device)
-        attention_mask = tokenized_inputs.attention_mask.to(self.model.device)
+    def forward(self, x):
+        x = self.act(self.fc1(x))
+        out = self.fc2(x)
+        out = self.norm(out + x)
+        return self.act(out)
+    
+class DirectionEmbedding(nn.Module):
+    def __init__(self, num_directions=4, hidden_dim=4096):
+        super().__init__()
+        self.embedding = nn.Embedding(num_directions, hidden_dim)
 
-        outputs = self.language.forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            past_key_values=None,
-            use_cache=False,
-        )
+    def forward(self, direction_idx):
+        return self.embedding(direction_idx)
 
+class WaypointTransformerHead(nn.Module):
+    def __init__(self, vlm_dim, traj_dim=3, num_waypoints=8, model_dim=512, num_layers=4, nhead=4):
+        super().__init__()
+        self.traj_dim = traj_dim
+        self.num_waypoints = num_waypoints
+        self.model_dim = model_dim
 
-        hidden_states = outputs.last_hidden_state
-        hidden_states = hidden_states[:, -1, :]
-        #print(f"Hidden state: {hidden_states.shape}")
-        #last_hidden_state = hidden_states[:, -1, :]
+        # Project last known state into transformer input space
+        self.input_proj = nn.Linear(traj_dim, model_dim)
 
-        #bev_semantic_map = self.bev_semantic_head(last_hidden_state)
+        # Project VLM output into transformer memory space
+        self.memory_proj = nn.Linear(vlm_dim, model_dim)
 
-        #output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
+        # Positional embeddings for decoder input
+        self.pos_emb = nn.Parameter(torch.empty(1, num_waypoints, model_dim))
+        torch.nn.init.normal_(self.pos_emb)
 
-        output: Dict[str, torch.Tensor] = {}
-        trajectory_outputs = self.trajectory_head(hidden_states)
-        #print(f"Trajectory outputs: {trajectory_outputs['trajectory'].shape}")
-        output.update(trajectory_outputs)
+        # Transformer decoder
+        decoder_layer = nn.TransformerDecoderLayer(d_model=model_dim, nhead=nhead, batch_first=True, dropout=0.2)
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
 
-        #agent_outputs = self.agent_head(hidden_states)
-        #output.update(agent_outputs)
+        # Final output projection to (x, y, yaw)
+        self.output_proj = nn.Linear(model_dim, traj_dim)
 
-        return output
+    def forward(self, s0, vlm_hidden_states, teacher_forcing_seq=None, teacher_forcing_ratio=1.0):
+        """
+        s0: initial ego vehicle state [B, 3]
+        vlm_hidden_states: full VLM sequence [B, L, D]
+        teacher_forcing_seq: [B, T, 3] for training, None for inference
+        """
+        B = s0.size(0)
+        memory = self.memory_proj(vlm_hidden_states)  # [B, L, model_dim]
+
+        if teacher_forcing_seq is not None:
+            # Training mode
+            teacher_forcing_seq = teacher_forcing_seq.to(s0.dtype)
+            preds = []
+            current = s0
+            
+            for t in range(self.num_waypoints):
+                if t == 0:
+                    inp = current
+                else:
+                    use_teacher = torch.rand(B, device = s0.device) < teacher_forcing_ratio
+                    pred_for_inp = preds[-1].detach().squeeze(1)  # Remove the extra dimension
+                    inp = torch.where(use_teacher.unsqueeze(1), 
+                                    teacher_forcing_seq[:, t-1], 
+                                    pred_for_inp).squeeze(1)
+                if t == 0:
+                    decoder_input = inp.unsqueeze(1)
+                else:
+                    decoder_input = torch.cat([decoder_input, inp.unsqueeze(1)], dim=1)
+
+                x = self.input_proj(decoder_input) + self.pos_emb[:, :decoder_input.size(1)].to(decoder_input.dtype)
+                T = decoder_input.size(1)
+                causal_mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
+                causal_mask = causal_mask.masked_fill(causal_mask, float('-inf')).masked_fill(~causal_mask, float(0.0))
+
+                out = self.decoder(tgt=x, memory=memory, tgt_mask=causal_mask)
+                next_step = self.output_proj(out[:, -1:])
+                preds.append(next_step)
+
+            return {"trajectory": torch.cat(preds, dim=1)}  # [B, T, 3]
+        else:
+            # Inference (autoregressive generation)
+            preds = []
+            current = s0  # [B, 3]
+            for t in range(self.num_waypoints):
+                if t == 0:
+                    decoder_input = current.unsqueeze(1)
+                else:
+                    decoder_input = torch.cat([decoder_input, preds[-1].squeeze(1).unsqueeze(1)], dim=1)
+                    
+                x = self.input_proj(decoder_input) + self.pos_emb[:, :decoder_input.size(1)].to(decoder_input.dtype)
+                T = decoder_input.size(1)
+                causal_mask = torch.triu(torch.ones(T, T, device=x.device), diagonal=1).bool()
+                causal_mask = causal_mask.masked_fill(causal_mask, float('-inf')).masked_fill(~causal_mask, float(0.0))
+                
+                out = self.decoder(tgt=x, memory=memory, tgt_mask=causal_mask)
+                next_step = self.output_proj(out[:, -1:])
+                preds.append(next_step)
+            
+            return {"trajectory": torch.cat(preds, dim=1)}  # [B, T, 3]
     
 class BEVSemanticHead(nn.Module):
     def __init__(self, d_ffn, num_classes=7, height=128, width=256):

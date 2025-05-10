@@ -42,6 +42,7 @@ class VisionLLMAgent(AbstractAgent):
         self._lr_final = lr_final
 
         self._checkpoint_path = checkpoint_path
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._vlm_model = VisionLLMModel(self._trajectory_sampling, config)
 
     def name(self) -> str:
@@ -73,6 +74,17 @@ class VisionLLMAgent(AbstractAgent):
             cam_b0=history_steps,
             lidar_pc=False,
         )
+        '''return SensorConfig(
+                cam_f0=False,
+                cam_l0=False,
+                cam_l1=False,
+                cam_l2=False,
+                cam_r0=False,
+                cam_r1=False,
+                cam_r2=False,
+                cam_b0=False,
+                lidar_pc=False,
+        )'''
 
     def get_target_builders(self) -> List[AbstractTargetBuilder]:
         """Inherited, see superclass."""
@@ -82,9 +94,9 @@ class VisionLLMAgent(AbstractAgent):
         """Inherited, see superclass."""
         return [VisionLLMFeatureBuilder(config=self._config)]
 
-    def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self, features: Dict[str, torch.Tensor], teacher_forcing_seq, teacher_forcing_ratio) -> Dict[str, torch.Tensor]:
         """Inherited, see superclass."""
-        return self._vlm_model(features)
+        return self._vlm_model(features, teacher_forcing_seq, teacher_forcing_ratio)
 
     def compute_loss(
         self,
@@ -102,8 +114,8 @@ class VisionLLMAgent(AbstractAgent):
         '''batch_size = self._config.dataloader.params.batch_size
         num_epochs = self._config.trainer.params.max_epochs
         gradient_accumulation_steps = self._config.trainer.params.accumulate_grad_batches'''
-        num_epochs = 5
-        gradient_accumulation_steps = 2
+        num_epochs = 10
+        gradient_accumulation_steps = 32
 
         num_training_steps = self._config.total_training_steps
 
@@ -137,7 +149,7 @@ class VisionLLMAgent(AbstractAgent):
             "lr_scheduler": {
                 "scheduler": scheduler,
                 "interval": "step",
-                "frequency": 2,
+                "frequency": gradient_accumulation_steps,
             }
         }
         #return optimizer

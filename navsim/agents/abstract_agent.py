@@ -22,6 +22,7 @@ class AbstractAgent(torch.nn.Module, ABC):
         super().__init__()
         self.requires_scene = requires_scene
         self._trajectory_sampling = trajectory_sampling
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @abstractmethod
     def name(self) -> str:
@@ -75,11 +76,18 @@ class AbstractAgent(torch.nn.Module, ABC):
         for builder in self.get_feature_builders():
             features.update(builder.compute_features(agent_input))
         # add batch dimension
-        features = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
+        #features = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
+        features = {
+            k: (v.unsqueeze(0).to(self.device) if isinstance(v, torch.Tensor) else v) 
+            for k, v in features.items()
+        }
+
+        teacher_forcing_seq = None
+        teacher_forcing_ratio = 1.0
 
         # forward pass
         with torch.no_grad():
-            predictions = self.forward(features)
+            predictions = self.forward(features, teacher_forcing_seq=teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
             poses = predictions["trajectory"].squeeze(0).cpu().numpy()
 
         # extract trajectory

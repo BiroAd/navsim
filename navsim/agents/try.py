@@ -16,3 +16,6 @@ sampler = TrajectorySampling(time_horizon=4, interval_length=0.5)
 model = VisionLLMModel(sampler, config)
 
 print(model)
+print(f"Num image token: {model.model.num_image_token}")
+print(f"Patch size: {model.model.patch_size}")
+print(f"Downsample factor: {model.model.downsample_ratio}")

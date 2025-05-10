@@ -11,5 +11,7 @@ config:
   _convert_: 'all'
   latent: False
 checkpoint_path: null
-lr_base: 1.25e-3
-lr_final: 1e-5
+lr_base: 1e-4
+lr_final: 5e-7
+#lr_base: 1.25e-3
+#lr_final: 1e-5
