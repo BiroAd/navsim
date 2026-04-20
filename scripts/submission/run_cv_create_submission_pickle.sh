@@ -6,6 +6,8 @@ COUNTRY="Hungary"
 CHECKPOINT=/root/workdir/biroa/navsim/exp/training_vision_llm_agent/best_currently/checkpoints/best/best.ckpt
 
 TRAIN_TEST_SPLIT=warmup_two_stage
+SYNTHETIC_SENSOR_PATH=$OPENSCENE_DATA_ROOT/warmup_two_stage/sensor_blobs
+SYNTHETIC_SCENES_PATH=$OPENSCENE_DATA_ROOT/warmup_two_stage/synthetic_scene_pickles
 export CUDA_VISIBLE_DEVICES=0
 
 nohup python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_create_submission_pickle.py \
@@ -19,4 +21,6 @@ authors=$AUTHORS \
 email=$EMAIL \
 institution=$INSTITUTION \
 country=$COUNTRY \
+synthetic_sensor_path=$SYNTHETIC_SENSOR_PATH \
+synthetic_scenes_path=$SYNTHETIC_SCENES_PATH \
 > vision_llm_submission.log 2>&1 &
