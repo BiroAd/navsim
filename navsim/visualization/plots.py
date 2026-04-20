@@ -80,7 +80,9 @@ def plot_bev_with_agent(scene: Scene, agent: AbstractAgent) -> Tuple[plt.Figure,
     """
 
     human_trajectory = scene.get_future_trajectory()
+    print(f"human trajectory: {human_trajectory}")
     agent_trajectory = agent.compute_trajectory(scene.get_agent_input())
+    print(f"agent trajectory: {agent_trajectory}")
 
     frame_idx = scene.scene_metadata.num_history_frames - 1
     fig, ax = plt.subplots(1, 1, figsize=BEV_PLOT_CONFIG["figure_size"])

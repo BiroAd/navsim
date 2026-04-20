@@ -7,6 +7,7 @@ from torch.amp import autocast
 import math
 
 from navsim.agents.abstract_agent import AbstractAgent
+import torchmetrics
 
 
 class AgentLightningModule(pl.LightningModule):
@@ -20,6 +21,7 @@ class AgentLightningModule(pl.LightningModule):
         super().__init__()
         self.agent = agent
         self.training_step_outputs = []
+        #self.train_loss_mean = torchmetrics.MeanMetric()
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
         """
@@ -52,7 +54,10 @@ class AgentLightningModule(pl.LightningModule):
         loss = self.agent.compute_loss(features, targets, prediction)
         if logging_prefix == "train":
             self.training_step_outputs.append(loss)
+            #self.train_loss_mean(loss)
             self.log(f"{logging_prefix}/loss_mean", torch.stack(self.training_step_outputs).mean(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            #self.log(f"{logging_prefix}/loss_mean", self.train_loss_mean.compute(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            #self.train_loss_mean.reset()
         self.log(f"{logging_prefix}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log(f"{logging_prefix}/tfr", teacher_forcing_ratio, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         if len(self.training_step_outputs) == 1600:

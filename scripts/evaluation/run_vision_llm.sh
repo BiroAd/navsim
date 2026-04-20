@@ -1,5 +1,5 @@
 TRAIN_TEST_SPLIT=warmup_two_stage
-CHECKPOINT=/root/workdir/biroa/navsim/exp/training_vision_llm_agent/2025.05.09.11.01.19/checkpoints/epochs/epoch5.ckpt
+CHECKPOINT=/root/workdir/biroa/navsim/exp/training_vision_llm_agent/2025.05.09.11.01.19/checkpoints/epochs/epoch7.ckpt
 CACHE_PATH=$NAVSIM_EXP_ROOT/metric_cache
 export CUDA_VISIBLE_DEVICES=0
 

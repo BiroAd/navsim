@@ -82,12 +82,9 @@ class AbstractAgent(torch.nn.Module, ABC):
             for k, v in features.items()
         }
 
-        teacher_forcing_seq = None
-        teacher_forcing_ratio = 1.0
-
         # forward pass
         with torch.no_grad():
-            predictions = self.forward(features, teacher_forcing_seq=teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
+            predictions = self.forward(features)
             poses = predictions["trajectory"].squeeze(0).cpu().numpy()
 
         # extract trajectory

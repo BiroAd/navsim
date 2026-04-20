@@ -15,6 +15,7 @@ from navsim.agents.vision_llm.vision_llm_loss import vision_llm_loss
 from navsim.agents.vision_llm.vision_llm_model import VisionLLMModel
 from navsim.common.dataclasses import SensorConfig
 from navsim.planning.training.abstract_feature_target_builder import AbstractFeatureBuilder, AbstractTargetBuilder
+from navsim.common.dataclasses import AgentInput, SensorConfig, Trajectory
 
 
 class VisionLLMAgent(AbstractAgent):
@@ -44,20 +45,34 @@ class VisionLLMAgent(AbstractAgent):
         self._checkpoint_path = checkpoint_path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._vlm_model = VisionLLMModel(self._trajectory_sampling, config)
+        #self._vlm_model = torch.compile(self._vlm_model)
 
     def name(self) -> str:
         """Inherited, see superclass."""
         return self.__class__.__name__
 
     def initialize(self) -> None:
-        """Inherited, see superclass."""
+        """Load checkpoint into the VisionLLMAgent, remapping keys if necessary."""
+        # Load checkpoint
         if torch.cuda.is_available():
             state_dict: Dict[str, Any] = torch.load(self._checkpoint_path)["state_dict"]
         else:
-            state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
-                "state_dict"
-            ]
-        self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()})
+            state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location="cpu")["state_dict"]
+
+        # Fix prefixes: remove "agent." and "_orig_mod" if present
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            k_new = k.replace("agent.", "")
+            k_new = k_new.replace("_vlm_model._orig_mod.", "_vlm_model.")
+            new_state_dict[k_new] = v
+
+        # Load state dict non-strictly to avoid warnings for any remaining mismatches
+        missing_keys, unexpected_keys = self.load_state_dict(new_state_dict, strict=False)
+
+        if missing_keys:
+            print("Missing keys:", missing_keys)
+        if unexpected_keys:
+            print("Unexpected keys:", unexpected_keys)
 
     def get_sensor_config(self) -> SensorConfig:
         """Inherited, see superclass."""
@@ -157,3 +172,33 @@ class VisionLLMAgent(AbstractAgent):
     def get_training_callbacks(self) -> List[pl.Callback]:
         """Inherited, see superclass."""
         return [VisionLLMCallback(self._config)]
+
+    def compute_trajectory(self, agent_input: AgentInput) -> Trajectory:
+        """
+        Computes the ego vehicle trajectory.
+        :param current_input: Dataclass with agent inputs.
+        :return: Trajectory representing the predicted ego's position in future
+        """
+        self.eval()
+        features: Dict[str, torch.Tensor] = {}
+
+        # build features
+        for builder in self.get_feature_builders():
+            features.update(builder.compute_features(agent_input))
+        # add batch dimension
+        #features = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
+        features = {
+            k: (v.unsqueeze(0).to(self.device) if isinstance(v, torch.Tensor) else v) 
+            for k, v in features.items()
+        }
+
+        teacher_forcing_seq = None
+        teacher_forcing_ratio = 1.0
+
+        # forward pass
+        with torch.no_grad():
+            predictions = self.forward(features, teacher_forcing_seq=teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
+            poses = predictions["trajectory"].squeeze(0).cpu().numpy()
+
+        # extract trajectory
+        return Trajectory(poses, self._trajectory_sampling)

@@ -35,8 +35,11 @@ class VisionLLMModel(nn.Module):
         self.ego_tokens_start = "<ego>"
         self.ego_tokens_end = "</ego>"
         self.ego_context_tokens = "<EGO_CONTEXT>"
+        self.image_context_tokens = "<IMG_CONTEXT>"
+        self.image_tokens_start = "<img>"
+        self.image_tokens_end = "</img>"
 
-        special_tokens_dict = {'additional_special_tokens': [self.ego_tokens_start, self.ego_tokens_end, self.ego_context_tokens]}
+        special_tokens_dict = {'additional_special_tokens': [self.ego_tokens_start, self.ego_tokens_end, self.ego_context_tokens, self.image_context_tokens, self.image_tokens_start, self.image_tokens_end]}
         num_added_tokens = self.tokenizer.add_special_tokens(special_tokens_dict)
 
         old_embeddings = self.model.get_input_embeddings()
@@ -82,7 +85,7 @@ class VisionLLMModel(nn.Module):
             "Generate a safe, feasible trajectory, accounting for obstacles, occlusions, and risks."
         )'''
 
-        question = ("current images: <image>, current statuses: <EGO>.\nWhat should be the next trajectory waypoints for the ego vehicle?")
+        question = ("current statuses: <EGO>, current images: <image>.\nWhat should be the next trajectory waypoints for the ego vehicle?")
 
         self.template.append_message(self.template.roles[0], question)
         self.template.append_message(self.template.roles[1], None)
@@ -93,38 +96,38 @@ class VisionLLMModel(nn.Module):
         self.language = self.model.language_model.model
         self.mlp = self.model.mlp1
 
-        hidden_dim = self.language.norm.weight.shape[0]
+        self.hidden_dim = self.language.norm.weight.shape[0]
 
-        self.token_type_embed = nn.Embedding(3, hidden_dim).to(self.model.device)
+        self.token_type_embed = nn.Embedding(3, self.hidden_dim).to(self.model.device)
 
-        '''self.encode_ego = EgoContinuousEncoder(input_dim=4, hidden_dim=hidden_dim).to(self.model.device)
-        self.encode_direction = DirectionEmbedding(num_directions=4, hidden_dim=hidden_dim).to(self.model.device)
+        '''self.encode_ego = EgoContinuousEncoder(input_dim=4, hidden_dim=self.hidden_dim).to(self.model.device)
+        self.encode_direction = DirectionEmbedding(num_directions=4, hidden_dim=self.hidden_dim).to(self.model.device)
 
         self.ego_fusion_mlp = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.Linear(self.hidden_dim, self.hidden_dim)
         ).to(self.model.device)'''
 
         self.velocity_encoder = nn.Sequential(
-            nn.Linear(2, hidden_dim),
+            nn.Linear(2, self.hidden_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim)
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim)
         ).to(self.model.device)
         
         self.acceleration_encoder = nn.Sequential(
-            nn.Linear(2, hidden_dim),
+            nn.Linear(2, self.hidden_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim)
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim)
         ).to(self.model.device)
-        
-        self.direction_embedding = nn.Embedding(4, hidden_dim).to(self.model.device)
+
+        self.direction_embedding = nn.Embedding(4, self.hidden_dim).to(self.model.device)
 
         self.agent_head = AgentHead(
             num_agents=config.num_bounding_boxes,
-            d_ffn=hidden_dim,
+            d_ffn=self.hidden_dim,
             d_model=config.tf_d_model,
         ).to(self.model.device)
 
@@ -135,26 +138,58 @@ class VisionLLMModel(nn.Module):
         ).to(self.model.device)'''
 
         self.trajectory_head = WaypointTransformerHead(
-            vlm_dim=hidden_dim,
+            vlm_dim=self.hidden_dim,
             traj_dim=3,
             num_waypoints=trajectory_sampling.num_poses,
-            model_dim=hidden_dim,
+            model_dim=self.hidden_dim,
             num_layers=4,
             nhead=4
         ).to(self.model.device)
 
 
         self.bev_semantic_head = BEVSemanticHead(
-            d_ffn=hidden_dim,
+            d_ffn=self.hidden_dim,
             num_classes=config.num_bev_classes,
             height=config.bev_pixel_height // config.bev_down_sample_factor,
             width=config.bev_pixel_width // config.bev_down_sample_factor,
+        ).to(self.model.device)
+
+        self.N_EGO_TOKENS = 32
+        self.image_tokens = 208
+
+        self.ego_fusion_mlp = nn.Sequential(
+            nn.Linear(3*self.hidden_dim, self.N_EGO_TOKENS *self.hidden_dim // 4),
+            nn.GELU(),
+            nn.Linear(self.N_EGO_TOKENS * self.hidden_dim // 4, self.N_EGO_TOKENS * self.hidden_dim)
         ).to(self.model.device)
 
 
         self.visual.gradient_checkpointing_enable()
         self.language.gradient_checkpointing_enable()
         self.embedding = self.language.embed_tokens.to(self.model.device)
+
+        '''self.raw_prompt_template = self.template.get_prompt()
+        ego_tokens = "<ego>" + ("<EGO_CONTEXT>" * self.N_EGO_TOKENS) + "</ego>"
+        img_tokens = "<img>" + ("<IMG_CONTEXT>" * self.image_tokens) + "</img>"
+        self.raw_prompt_template = self.raw_prompt_template.replace("<EGO>", ego_tokens)
+        query = self.raw_prompt_template.replace("<image>", img_tokens)
+
+        tok = self.tokenizer(
+            query,
+            return_tensors="pt",
+            padding=True,
+            add_special_tokens=True
+        )
+
+        self.register_buffer("input_ids", tok["input_ids"])
+        self.register_buffer("attention_mask", tok["attention_mask"])
+
+        ego_id = self.tokenizer.convert_tokens_to_ids("<EGO_CONTEXT>")
+        img_id = self.tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
+
+        self.register_buffer("ego_positions", (self.input_ids == ego_id))
+        self.register_buffer("img_positions", (self.input_ids == img_id))'''
+
 
 
     def forward(self, features: Dict[str, torch.Tensor], teacher_forcing_seq=None, teacher_forcing_ratio=1.0) -> Dict[str, torch.Tensor]:
@@ -172,25 +207,24 @@ class VisionLLMModel(nn.Module):
             direction = features["driving_command"]
             acceleration = features["acceleration"]
 
-            '''fuse = torch.cat([velocity, acceleration], dim=-1)
-            enc_velocity = self.encode_ego(fuse)
-            enc_direction = self.encode_direction(direction)
-
-            ego_concat = torch.cat([enc_velocity, enc_direction], dim=-1)
-            ego_embeds = self.ego_fusion_mlp(ego_concat)
-            print(f"Ego token: {ego_embeds.shape}")'''
-
             enc_velocity = self.velocity_encoder(velocity).unsqueeze(dim=1)
             enc_acceleration = self.acceleration_encoder(acceleration).unsqueeze(dim=1)
             enc_direction = self.direction_embedding(direction).unsqueeze(dim=1)
+
             ego_embeds = torch.cat([enc_velocity, enc_acceleration, enc_direction], dim=1)
+
+            ego_embeds_flat = ego_embeds.view(b, -1)
+
+            ego_embeds = self.ego_fusion_mlp(ego_embeds_flat)
+
+            ego_embeds = ego_embeds.view(b, self.N_EGO_TOKENS, self.hidden_dim)
             
             batch_size = ego_embeds.shape[0]
 
             query = self.template.get_prompt()
 
             ego_tokens = self.ego_tokens_start + self.ego_context_tokens * ego_embeds.shape[1] + self.ego_tokens_end
-            image_tokens = '<img>' + '<IMG_CONTEXT>' * feature.shape[1] + '</img>'
+            image_tokens = self.image_tokens_start + self.image_context_tokens * feature.shape[1] + self.image_tokens_end
 
             query = query.replace('<image>', image_tokens)
             query = query.replace('<EGO>', ego_tokens)
@@ -200,13 +234,13 @@ class VisionLLMModel(nn.Module):
             input_ids = tokenized_inputs['input_ids'].expand(batch_size, -1)
 
             attention_mask = tokenized_inputs['attention_mask'].expand(batch_size, -1)
+            #input_ids = self.input_ids.to(self.model.device).expand(batch_size, -1)
+            #attention_mask = self.attention_mask.to(self.model.device).expand(batch_size, -1)
+            #ego_positions = self.ego_positions.to(self.model.device).expand(batch_size, -1)
+            #image_positions = self.img_positions.to(self.model.device).expand(batch_size, -1)
 
-            ego_token_id = self.tokenizer.convert_tokens_to_ids("<EGO_CONTEXT>")
-            ego_positions = (input_ids == ego_token_id)
-
-            image_token_id = self.tokenizer.convert_tokens_to_ids("<IMG_CONTEXT>")
-            image_positions = (input_ids == image_token_id)
-
+            ego_positions = (input_ids == self.ego_context_tokens)
+            image_positions = (input_ids == self.image_context_tokens)
             text_len = input_ids.shape[1]
 
             token_type_ids = torch.zeros((batch_size, text_len), dtype=torch.int32, device=input_ids.device)
@@ -219,6 +253,7 @@ class VisionLLMModel(nn.Module):
             text_embeds = self.embedding(input_ids)
             text_embeds[ego_positions] = ego_embeds.reshape(-1, ego_embeds.shape[-1]).to(text_embeds.dtype)
             text_embeds[image_positions] = feature.reshape(-1, feature.shape[-1]).to(text_embeds.dtype)
+
 
             all_embeds = text_embeds + token_type_embeds
 
@@ -239,7 +274,7 @@ class VisionLLMModel(nn.Module):
             #output: Dict[str, torch.Tensor] = {"bev_semantic_map": bev_semantic_map}
 
             output: Dict[str, torch.Tensor] = {}
-            s0 = torch.Tensor([0, 0, 0]).expand(batch_size, -1).to(self.model.device)
+            s0 = torch.zeros(batch_size, 3, device=self.model.device, dtype=torch.float32)
             trajectory_outputs = self.trajectory_head(s0, hidden_states, teacher_forcing_seq=teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
             #print(f"Trajectory outputs: {trajectory_outputs['trajectory'].shape}")
             output.update(trajectory_outputs)
