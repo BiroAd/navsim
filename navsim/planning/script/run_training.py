@@ -3,7 +3,10 @@ from pathlib import Path
 from typing import Tuple
 
 import hydra
+import wandb
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
@@ -13,6 +16,8 @@ from navsim.common.dataclasses import SceneFilter
 from navsim.common.dataloader import SceneLoader
 from navsim.planning.training.agent_lightning_module import AgentLightningModule
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
+
+from pytorch_lightning.callbacks import EarlyStopping
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +132,44 @@ def main(cfg: DictConfig) -> None:
     val_dataloader = DataLoader(val_data, **cfg.dataloader.params, shuffle=False)
     logger.info("Num validation samples: %d", len(val_data))
 
+    wandb.login(key="2a770f6c6584aca307b2a89041c365b370f63cf2")
+    logger.info("Initializing WandB Logger")
+    wandb_logger = WandbLogger(
+        project="transfuser",
+        name=cfg.experiment_name,
+        save_dir=cfg.output_dir
+    )
+
     logger.info("Building Trainer")
-    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks())
+    epoch_checkpoint = ModelCheckpoint(
+        dirpath=f"{cfg.checkpoint.dirpath}/epochs",
+        filename="epoch-{epoch:02d}",
+        save_top_k=-1,
+        every_n_epochs=1,
+    )
+
+    best_model_checkpoint = ModelCheckpoint(
+        dirpath=f"{cfg.checkpoint.dirpath}/best",
+        filename="best-{epoch:02d}-{val_loss:.2f}",
+        save_top_k=1,
+        monitor="val/loss",
+        mode="min",
+    )
+
+    early_stopping = EarlyStopping(
+        monitor="val/loss",
+        patience=5,  # Number of epochs with no improvement after which training will stop
+        verbose=True,
+        mode="min"
+    )
+
+    # Include early_stopping in your callbacks list
+    trainer = pl.Trainer(
+        **cfg.trainer.params,
+        callbacks=[best_model_checkpoint, epoch_checkpoint, early_stopping] + agent.get_training_callbacks(),
+        logger=wandb_logger,
+    )
+
 
     logger.info("Starting Training")
     trainer.fit(

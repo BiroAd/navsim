@@ -39,7 +39,8 @@ class TransfuserAgent(AbstractAgent):
         self._lr = lr
 
         self._checkpoint_path = checkpoint_path
-        self._transfuser_model = TransfuserModel(self._trajectory_sampling, config)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self._transfuser_model = TransfuserModel(self._trajectory_sampling, config).to(self.device)
 
     def name(self) -> str:
         """Inherited, see superclass."""
@@ -58,7 +59,7 @@ class TransfuserAgent(AbstractAgent):
     def get_sensor_config(self) -> SensorConfig:
         """Inherited, see superclass."""
         # NOTE: Transfuser only uses current frame (with index 3 by default)
-        history_steps = [3]
+        history_steps = [2, 3]
         return SensorConfig(
             cam_f0=history_steps,
             cam_l0=history_steps,

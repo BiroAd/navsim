@@ -90,9 +90,65 @@ def add_annotations_to_camera_ax(ax: plt.Axes, camera: Camera, annotations: Anno
     valid_corners = corners_pc_in_fov.any(-1)
 
     box_corners, box_labels = box_corners[valid_corners], box_labels[valid_corners]
-    image = _plot_rect_3d_on_img(camera.image.copy(), box_corners, box_labels)
 
+    image = _plot_rect_3d_on_img(camera.image.copy(), box_corners, box_labels)
     ax.imshow(image)
+
+    '''box_labels = annotations.names
+    boxes = _transform_annotations_to_camera(
+        annotations.boxes,
+        camera.sensor2lidar_rotation,
+        camera.sensor2lidar_translation,
+    )
+    box_positions, box_dimensions, box_heading = (
+        boxes[:, BoundingBoxIndex.POSITION],
+        boxes[:, BoundingBoxIndex.DIMENSION],
+        boxes[:, BoundingBoxIndex.HEADING],
+    )
+
+    corners_norm = np.stack(np.unravel_index(np.arange(8), [2] * 3), axis=1)
+    corners_norm = corners_norm[[0, 1, 3, 2, 4, 5, 7, 6]]
+    corners_norm = corners_norm - np.array([0.5, 0.5, 0.5])
+    corners = box_dimensions.reshape([-1, 1, 3]) * corners_norm.reshape([1, 8, 3])
+    corners = _rotation_3d_in_axis(corners, box_heading, axis=1)
+    corners += box_positions.reshape(-1, 1, 3)
+    
+    # Then draw project corners to image.
+    box_corners, corners_pc_in_fov = _transform_points_to_image(corners.reshape(-1, 3), camera.intrinsics)
+    box_corners = box_corners.reshape(-1, 8, 2)
+    corners_pc_in_fov = corners_pc_in_fov.reshape(-1, 8)
+    print(corners_pc_in_fov)
+    
+    # Calculate the visibility of each box (how many corners are in FOV)
+    visibility_count = corners_pc_in_fov.sum(-1)
+    print(visibility_count)
+    
+    # Calculate distance to center of each box
+    distances = np.linalg.norm(box_positions, axis=1)
+    
+    # Create a mask for visible boxes - we want boxes with at least 4 corners visible
+    # This is more restrictive than the original code which used .any(-1)
+    visible_boxes = visibility_count >= 4
+    
+    # Sort the visible boxes by distance
+    if np.any(visible_boxes):
+        visible_indices = np.where(visible_boxes)[0]
+        # Sort by distance (closest first)
+        sorted_indices = visible_indices[np.argsort(distances[visible_indices])]
+        
+        # Take only the nearest N boxes if there are too many
+        #max_boxes_to_show = 40  # Adjust this number as needed
+        #sorted_indices = sorted_indices[:max_boxes_to_show]
+        
+        box_corners = box_corners[sorted_indices]
+        box_labels = box_labels[sorted_indices]
+        
+        image = _plot_rect_3d_on_img(camera.image.copy(), box_corners, box_labels)
+    else:
+        # No visible boxes
+        image = camera.image.copy()
+        
+    ax.imshow(image)'''
     return ax
 
 

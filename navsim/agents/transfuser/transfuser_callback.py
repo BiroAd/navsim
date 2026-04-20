@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, Union
 
+import wandb
 import cv2
 import numpy as np
 import numpy.typing as npt
@@ -58,7 +59,12 @@ class TransfuserCallback(pl.Callback):
                 dict_to_device(predictions, "cpu"),
             )
             grid = self._visualize_model(features, targets, predictions)
-            trainer.logger.experiment.add_image(f"val_plot_{idx_plot}", grid, global_step=trainer.current_epoch)
+            #trainer.logger.experiment.add_image(f"val_plot_{idx_plot}", grid, global_step=trainer.current_epoch)
+
+            trainer.logger.experiment.log({
+                f"train_plot_{idx_plot}": wandb.Image(grid.permute(1, 2, 0).numpy()),  # Convert to WandB Image
+                "epoch": trainer.current_epoch  # Log the current epoch
+            })
 
     def on_test_epoch_start(self, trainer: pl.Trainer, lightning_module: pl.LightningModule) -> None:
         """Inherited, see superclass."""
@@ -87,7 +93,11 @@ class TransfuserCallback(pl.Callback):
                 dict_to_device(predictions, "cpu"),
             )
             grid = self._visualize_model(features, targets, predictions)
-            trainer.logger.experiment.add_image(f"train_plot_{idx_plot}", grid, global_step=trainer.current_epoch)
+            #trainer.logger.experiment.add_image(f"train_plot_{idx_plot}", grid, global_step=trainer.current_epoch)
+            trainer.logger.experiment.log({
+                f"train_plot_{idx_plot}": wandb.Image(grid.permute(1, 2, 0).numpy()),  # Convert to WandB Image
+                "epoch": trainer.current_epoch  # Log the current epoch
+            })
 
     def _visualize_model(
         self,

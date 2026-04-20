@@ -8,6 +8,8 @@ from nuplan.planning.simulation.trajectory.trajectory_sampling import Trajectory
 from navsim.common.dataclasses import AgentInput, SensorConfig, Trajectory
 from navsim.planning.training.abstract_feature_target_builder import AbstractFeatureBuilder, AbstractTargetBuilder
 
+from transformers import AutoTokenizer
+
 
 class AbstractAgent(torch.nn.Module, ABC):
     """Interface for an agent in NAVSIM."""
@@ -20,6 +22,7 @@ class AbstractAgent(torch.nn.Module, ABC):
         super().__init__()
         self.requires_scene = requires_scene
         self._trajectory_sampling = trajectory_sampling
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     @abstractmethod
     def name(self) -> str:
@@ -68,17 +71,21 @@ class AbstractAgent(torch.nn.Module, ABC):
         """
         self.eval()
         features: Dict[str, torch.Tensor] = {}
+
         # build features
         for builder in self.get_feature_builders():
             features.update(builder.compute_features(agent_input))
-
         # add batch dimension
-        features = {k: v.unsqueeze(0) for k, v in features.items()}
+        #features = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
+        features = {
+            k: (v.unsqueeze(0).to(self.device) if isinstance(v, torch.Tensor) else v) 
+            for k, v in features.items()
+        }
 
         # forward pass
         with torch.no_grad():
             predictions = self.forward(features)
-            poses = predictions["trajectory"].squeeze(0).numpy()
+            poses = predictions["trajectory"].squeeze(0).cpu().numpy()
 
         # extract trajectory
         return Trajectory(poses, self._trajectory_sampling)
