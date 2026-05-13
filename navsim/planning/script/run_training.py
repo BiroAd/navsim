@@ -135,7 +135,7 @@ def main(cfg: DictConfig) -> None:
     wandb.login(key="2a770f6c6584aca307b2a89041c365b370f63cf2")
     logger.info("Initializing WandB Logger")
     wandb_logger = WandbLogger(
-        project="transfuser",
+        project="vision_llm_project", # <-- Change your wandb project name here
         name=cfg.experiment_name,
         save_dir=cfg.output_dir
     )
@@ -158,7 +158,7 @@ def main(cfg: DictConfig) -> None:
 
     early_stopping = EarlyStopping(
         monitor="val/loss",
-        patience=5,  # Number of epochs with no improvement after which training will stop
+        patience=3,  # Number of epochs with no improvement after which training will stop
         verbose=True,
         mode="min"
     )

@@ -21,6 +21,10 @@ class AgentLightningModule(pl.LightningModule):
         super().__init__()
         self.agent = agent
         self.training_step_outputs = []
+        self.training_grad_lang = []
+        self.training_grad_vision = []
+        self.training_grad_traj = []
+        self.training_grad_ego = []
         #self.train_loss_mean = torchmetrics.MeanMetric()
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
@@ -53,14 +57,14 @@ class AgentLightningModule(pl.LightningModule):
         #loss, separate_losses = self.agent.compute_loss(features, targets, prediction)
         loss = self.agent.compute_loss(features, targets, prediction)
         if logging_prefix == "train":
-            self.training_step_outputs.append(loss)
+            self.training_step_outputs.append(loss.detach().cpu())
             #self.train_loss_mean(loss)
-            self.log(f"{logging_prefix}/loss_mean", torch.stack(self.training_step_outputs).mean(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log(f"{logging_prefix}/loss_mean", torch.stack(self.training_step_outputs).mean(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=False)
             #self.log(f"{logging_prefix}/loss_mean", self.train_loss_mean.compute(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             #self.train_loss_mean.reset()
         self.log(f"{logging_prefix}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log(f"{logging_prefix}/tfr", teacher_forcing_ratio, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        if len(self.training_step_outputs) == 1600:
+        if len(self.training_step_outputs) == 800:
             self.training_step_outputs = []
         #pos_loss = separate_losses["pos_loss"]
         #theta_loss = separate_losses["theta_loss"]
@@ -96,3 +100,164 @@ class AgentLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         """Inherited, see superclass."""
         return self.agent.get_optimizers()
+
+
+    def _grad_norm(self, module):
+        """
+        Computes total L2 gradient norm of a module.
+        Only includes trainable parameters with gradients.
+        """
+        total_norm = 0.0
+
+        for p in module.parameters():
+            if p.requires_grad and p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+
+        return total_norm ** 0.5
+
+
+    def _grad_norm_by_name(self, model, keyword):
+        """
+        Computes gradient norm for parameters whose name contains `keyword`.
+        Useful for LoRA monitoring.
+        """
+        total_norm = 0.0
+
+        for name, p in model.named_parameters():
+            if keyword in name and p.requires_grad and p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+
+        return total_norm ** 0.5
+
+
+    def _param_norm(self, module):
+        """
+        Computes parameter L2 norm.
+        Useful for grad/weight ratio diagnostics.
+        """
+        total_norm = 0.0
+
+        for p in module.parameters():
+            if p.requires_grad:
+                param_norm = p.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+
+        return total_norm ** 0.5
+
+    def on_after_backward(self):
+        """
+        Logs gradient norms after backward pass.
+        # Extremely useful for debugging optimization imbalance.
+        # """
+
+        if hasattr(self.agent, "model"):
+            model = self.agent.model
+        elif hasattr(self.agent, "_vlm_model"):
+            model = self.agent._vlm_model
+        else:
+            return  # Skip gradient logging if model attribute is not found
+
+        # --------------------------------------------------
+        # Main trainable modules
+        # --------------------------------------------------
+
+        traj_head_grad = self._grad_norm(model.traj_classifier)
+        self.training_grad_traj.append(traj_head_grad)
+        ego_mlp_grad = self._grad_norm(model.ego_fusion_mlp)
+        self.training_grad_ego.append(ego_mlp_grad)
+
+        # --------------------------------------------------
+        # LoRA gradient norms
+        # --------------------------------------------------
+
+        language_lora_grad = self._grad_norm_by_name(
+            model,
+            "language_model"
+        )
+        self.training_grad_language.append(language_lora_grad)
+
+        vision_lora_grad = self._grad_norm_by_name(
+            model,
+            "visual"
+        )
+        self.training_grad_vision.append(vision_lora_grad)
+
+        # --------------------------------------------------
+        # Parameter norms
+        # --------------------------------------------------
+
+        traj_head_param = self._param_norm(model.traj_classifier)
+        ego_mlp_param = self._param_norm(model.ego_fusion_mlp)
+
+        # --------------------------------------------------
+        # Gradient / weight ratios
+        # --------------------------------------------------
+
+        traj_ratio = traj_head_grad / (traj_head_param + 1e-8)
+        ego_ratio = ego_mlp_grad / (ego_mlp_param + 1e-8)
+
+        # --------------------------------------------------
+        # Logging
+        # --------------------------------------------------
+
+        self.log(
+            "grad/traj_head",
+            torch.stack(self.training_grad_traj).mean(),
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=False,
+        )
+
+        self.log(
+            "grad/ego_mlp",
+            torch.stack(self.training_grad_ego).mean(),
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=False,
+        )
+
+        self.log(
+            "grad/lang_lora",
+            torch.stack(self.training_grad_language).mean(),
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=False,
+        )
+
+        self.log(
+            "grad/vision_lora",
+            torch.stack(self.training_grad_vision).mean(),
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=False,
+        )
+
+        self.log(
+            "grad_ratio/traj_head",
+            traj_ratio,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=False,
+        )
+
+        self.log(
+            "grad_ratio/ego_mlp",
+            ego_ratio,
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=False,
+        )
+
+        if len(self.training_grad_vision) == 800:
+            self.training_grad_vision = []
+            self.training_grad_language = []
+            self.training_grad_traj = []
+            self.training_grad_ego = []

@@ -1,6 +1,6 @@
 TRAIN_TEST_SPLIT=navtrain
 CACHE_PATH=$NAVSIM_EXP_ROOT/training_cache
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=3
 
 nohup python $NAVSIM_DEVKIT_ROOT/navsim/planning/script/run_training.py \
 agent=vision_llm_agent \

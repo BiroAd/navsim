@@ -1,0 +1,14 @@
+_target_: navsim.agents.vision_llm_lora.vision_llm_lora_agent.VisionLLMLoRAAgent
+_convert_: 'all'
+
+trajectory_sampling:
+    _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
+    _convert_: 'all'
+    time_horizon: 4
+    interval_length: 0.5
+config:
+  _target_: navsim.agents.vision_llm_lora.vision_llm_lora_config.VisionLLMLoRAConfig
+  _convert_: 'all'
+checkpoint_path: null
+lr_base: 5e-4
+lr_final: 2e-5

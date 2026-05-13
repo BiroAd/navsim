@@ -125,11 +125,11 @@ class VisionLLMModel(nn.Module):
 
         self.direction_embedding = nn.Embedding(4, self.hidden_dim).to(self.model.device)
 
-        self.agent_head = AgentHead(
+        '''self.agent_head = AgentHead(
             num_agents=config.num_bounding_boxes,
             d_ffn=self.hidden_dim,
             d_model=config.tf_d_model,
-        ).to(self.model.device)
+        ).to(self.model.device)'''
 
         '''self.trajectory_head = TrajectoryHead(
             num_poses=trajectory_sampling.num_poses,
