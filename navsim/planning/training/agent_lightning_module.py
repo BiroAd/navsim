@@ -25,6 +25,11 @@ class AgentLightningModule(pl.LightningModule):
         self.training_grad_vision = []
         self.training_grad_traj = []
         self.training_grad_ego = []
+        self.training_entropy = []
+        #self.training_attn_weights = []
+        self.training_similarity = []
+        self.training_ade = []
+        self.training_fde = []
         #self.train_loss_mean = torchmetrics.MeanMetric()
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
@@ -55,23 +60,84 @@ class AgentLightningModule(pl.LightningModule):
 
         prediction = self.agent.forward(features, teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
         #loss, separate_losses = self.agent.compute_loss(features, targets, prediction)
-        loss = self.agent.compute_loss(features, targets, prediction)
+        loss, entropy, similarity, ade_loss, fde_loss = self.agent.compute_loss(features, targets, prediction)
         if logging_prefix == "train":
             self.training_step_outputs.append(loss.detach().cpu())
+            self.training_entropy.append(entropy.detach().cpu())
+            #self.training_attn_weights.append(attn_weights.detach().cpu())
+            self.training_similarity.append(similarity.detach().cpu())
+            self.training_ade.append(ade_loss.detach().cpu())
+            self.training_fde.append(fde_loss.detach().cpu())
             #self.train_loss_mean(loss)
             self.log(f"{logging_prefix}/loss_mean", torch.stack(self.training_step_outputs).mean(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=False)
+            self.log(
+                f"stabilize/{logging_prefix}/entropy_mean",
+                torch.stack(self.training_entropy).mean(),
+                on_step=True,
+                on_epoch=False,            
+                prog_bar=False,
+                sync_dist=False,
+            )
+        
+            #self.log(
+            #    f"stabilize/{logging_prefix}/attn_weights_mean",
+            #    torch.stack(self.training_attn_weights).mean(),
+            #    on_step=True,
+            #    on_epoch=False,            
+            #    prog_bar=False,
+            #    sync_dist=False,
+            #)
+
+            self.log(
+                f"stabilize/{logging_prefix}/similarity_mean",
+                torch.stack(self.training_similarity).mean(),
+                on_step=True,
+                on_epoch=False,            
+                prog_bar=False,
+                sync_dist=False,
+            )
+            
+            self.log(
+                f"stabilize/{logging_prefix}/ade_mean",
+                torch.stack(self.training_ade).mean(),
+                on_step=True,
+                on_epoch=False,            
+                prog_bar=False,
+                sync_dist=False,
+            )
+
+            self.log(
+                f"stabilize/{logging_prefix}/fde_mean",
+                torch.stack(self.training_fde).mean(),
+                on_step=True,
+                on_epoch=False,            
+                prog_bar=False,
+                sync_dist=False,
+            )
             #self.log(f"{logging_prefix}/loss_mean", self.train_loss_mean.compute(), on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
             #self.train_loss_mean.reset()
         self.log(f"{logging_prefix}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log(f"{logging_prefix}/tfr", teacher_forcing_ratio, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        if len(self.training_step_outputs) == 800:
-            self.training_step_outputs = []
+        self.log(f"stabilize/{logging_prefix}/ade_loss", ade_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log(f"stabilize/{logging_prefix}/fde_loss", fde_loss, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log(f"stabilize/{logging_prefix}/entropy", entropy, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log(f"stabilize/{logging_prefix}/similarity", similarity, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        #self.log(f"stabilize/{logging_prefix}/attn_weights", attn_weights, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)  
         #pos_loss = separate_losses["pos_loss"]
         #theta_loss = separate_losses["theta_loss"]
         #self.log(f"{logging_prefix}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         #self.log(f"{logging_prefix}/pos_loss", pos_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         #self.log(f"{logging_prefix}/theta_loss", theta_loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         #self.log(f"{logging_prefix}/lr", self.trainer.optimizers[0].param_groups[0]["lr"], on_step=True, on_epoch=True, prog_bar=True)
+
+
+        if len(self.training_step_outputs) == 800:
+            self.training_step_outputs = []
+            self.training_entropy = []
+            #self.training_attn_weights = []
+            self.training_similarity = []
+            self.training_ade = []
+            self.training_fde = []
 
         return loss
     
@@ -176,7 +242,7 @@ class AgentLightningModule(pl.LightningModule):
             model,
             "language_model"
         )
-        self.training_grad_language.append(language_lora_grad)
+        self.training_grad_lang.append(language_lora_grad)
 
         vision_lora_grad = self._grad_norm_by_name(
             model,
@@ -204,7 +270,7 @@ class AgentLightningModule(pl.LightningModule):
 
         self.log(
             "grad/traj_head",
-            torch.stack(self.training_grad_traj).mean(),
+            torch.tensor(self.training_grad_traj, dtype=torch.float32).mean() if self.training_grad_traj else 0.0,
             on_step=True,
             on_epoch=False,
             prog_bar=False,
@@ -213,7 +279,7 @@ class AgentLightningModule(pl.LightningModule):
 
         self.log(
             "grad/ego_mlp",
-            torch.stack(self.training_grad_ego).mean(),
+            torch.tensor(self.training_grad_ego, dtype=torch.float32).mean() if self.training_grad_ego else 0.0,
             on_step=True,
             on_epoch=False,
             prog_bar=False,
@@ -222,7 +288,7 @@ class AgentLightningModule(pl.LightningModule):
 
         self.log(
             "grad/lang_lora",
-            torch.stack(self.training_grad_language).mean(),
+            torch.tensor(self.training_grad_lang, dtype=torch.float32).mean() if self.training_grad_lang else 0.0,
             on_step=True,
             on_epoch=False,
             prog_bar=False,
@@ -231,7 +297,7 @@ class AgentLightningModule(pl.LightningModule):
 
         self.log(
             "grad/vision_lora",
-            torch.stack(self.training_grad_vision).mean(),
+            torch.tensor(self.training_grad_vision, dtype=torch.float32).mean() if self.training_grad_vision else 0.0,
             on_step=True,
             on_epoch=False,
             prog_bar=False,
@@ -258,6 +324,6 @@ class AgentLightningModule(pl.LightningModule):
 
         if len(self.training_grad_vision) == 800:
             self.training_grad_vision = []
-            self.training_grad_language = []
+            self.training_grad_lang = []
             self.training_grad_traj = []
             self.training_grad_ego = []

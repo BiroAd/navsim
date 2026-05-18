@@ -96,6 +96,12 @@ def main(cfg: DictConfig) -> None:
 
     logger.info("Building Agent")
     agent: AbstractAgent = instantiate(cfg.agent)
+    
+    # We do NOT call agent.initialize() here if we resume natively, 
+    # since trainer.fit(ckpt_path=...) will load all the weights automatically.
+    # If not resuming deeply via trainer (e.g. no ckpt_path), then initialize manually.
+    if not (hasattr(cfg.agent, "checkpoint_path") and cfg.agent.checkpoint_path is not None):
+        agent.initialize()
 
     logger.info("Building Lightning Module")
     lightning_module = AgentLightningModule(
@@ -134,11 +140,19 @@ def main(cfg: DictConfig) -> None:
 
     wandb.login(key="2a770f6c6584aca307b2a89041c365b370f63cf2")
     logger.info("Initializing WandB Logger")
-    wandb_logger = WandbLogger(
-        project="vision_llm_project", # <-- Change your wandb project name here
-        name=cfg.experiment_name,
-        save_dir=cfg.output_dir
-    )
+    
+    # Check if a wandb run ID is provided for resuming
+    wandb_kwargs = {
+        "project": "vision_llm_project",
+        "name": cfg.experiment_name,
+        "save_dir": cfg.output_dir
+    }
+    
+    if hasattr(cfg, "wandb_id") and cfg.wandb_id is not None:
+        wandb_kwargs["id"] = cfg.wandb_id
+        wandb_kwargs["resume"] = "must"
+
+    wandb_logger = WandbLogger(**wandb_kwargs)
 
     logger.info("Building Trainer")
     epoch_checkpoint = ModelCheckpoint(
@@ -172,11 +186,18 @@ def main(cfg: DictConfig) -> None:
 
 
     logger.info("Starting Training")
-    trainer.fit(
-        model=lightning_module,
-        train_dataloaders=train_dataloader,
-        val_dataloaders=val_dataloader,
-    )
+    
+    fit_kwargs = {
+        "model": lightning_module,
+        "train_dataloaders": train_dataloader,
+        "val_dataloaders": val_dataloader,
+    }
+    
+    # If resuming natively via Pytorch Lightning, pass the checkpoint path
+    if hasattr(cfg.agent, "checkpoint_path") and cfg.agent.checkpoint_path is not None:
+        fit_kwargs["ckpt_path"] = cfg.agent.checkpoint_path
+        
+    trainer.fit(**fit_kwargs)
 
 
 if __name__ == "__main__":

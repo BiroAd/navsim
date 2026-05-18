@@ -33,7 +33,7 @@ checkpoint:
 
 trainer:
   params:
-    max_epochs: 20  # maximum number of training epochs
+    max_epochs: 10  # maximum number of training epochs
     check_val_every_n_epoch: 1  # run validation set every n training epochs
     val_check_interval: 1.0  # [%] run validation set every X% of training set
 
@@ -51,7 +51,7 @@ trainer:
 
     accumulate_grad_batches: 16  # accumulates gradients every n batches
     #track_grad_norm: 2  # logs the p-norm for inspection
-    gradient_clip_val: 1.0  # value to clip gradients
+    gradient_clip_val: 5.0  # value to clip gradients
     gradient_clip_algorithm: norm  # [value, norm] method to clip gradients
     default_root_dir: ${output_dir}
 

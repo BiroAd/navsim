@@ -15,10 +15,18 @@ class VisionLLMLoRAConfig:
 
     # ── Training schedule ─────────────────────────────────────────────────────
     total_training_steps: int = 10639
+    #total_training_steps: int = 21278
     #total_training_steps: int = 21
-    num_epochs: int = 20
+    num_epochs: int = 10
     gradient_accumulation_steps: int = 16
-    warmup_ratio: float = 0.1
+    warmup_ratio: float = 0.05
+
+    # Stage 1 values:  traj=1.0, ego=1.0, lang=0.0, vision=0.0
+    # Stage 2 values:  traj=0.4, ego=0.5, lang=0.1, vision=0.05
+    traj_lr_multiplier:   float = 1.0
+    ego_lr_multiplier:    float = 1.0
+    lang_lr_multiplier:   float = 0.0
+    vision_lr_multiplier: float = 0.0
 
     # ── Trajectory codebook ───────────────────────────────────────────────────
     # Path to an (N, 3) NumPy array; each row is one (x, y, yaw) candidate
@@ -34,7 +42,7 @@ class VisionLLMLoRAConfig:
     yaw_distance_weight: float = 2.5
 
     # Temperature for label smoothing when building soft targets from codebook distances.
-    label_temperature: float = 0.3
+    label_temperature: float = 1.0
 
     # Training loss weights
     trajectory_token_loss_weight: float = 1.0    # cross-entropy on trajectory tokens
@@ -43,7 +51,8 @@ class VisionLLMLoRAConfig:
     # ── Vision encoder ────────────────────────────────────────────────────────
     # Whether to allow gradients through Qwen's built-in visual tower.
     # Keep False to save memory; enable only for full fine-tuning runs.
-    train_vision_encoder: bool = True
+    train_vision_encoder: bool = False
+    train_language_model: bool = False
 
     # Input resolution fed to the vision encoder
     camera_width: int = 112
@@ -54,13 +63,16 @@ class VisionLLMLoRAConfig:
     n_ego_tokens: int = 4
 
     # ── LoRA ─────────────────────────────────────────────────────────────────
-    enable_lora: bool = True
-    lora_r: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.05
+    enable_lora: bool = False
     lora_bias: str = "none"
-    lora_target_modules: Tuple[str, ...] = (
-        # --- Text Model Targets ---
+    print_trainable_parameters: bool = True
+
+    # --- LLM LoRA ---
+    llm_lora_r: int = 16
+    llm_lora_alpha: int = 32          # alpha/r = 2.0
+    llm_lora_dropout: float = 0.05
+    llm_use_dora: bool = False        # standard LoRA is enough for routing
+    llm_lora_target_modules: Tuple[str, ...] = (
         "q_proj",
         "k_proj",
         "v_proj",
@@ -68,14 +80,23 @@ class VisionLLMLoRAConfig:
         "gate_proj",
         "up_proj",
         "down_proj",
-        # --- Vision Model Targets ---
-        "qkv",          # Vision attention query/key/value
-        "linear_fc1",   # Vision MLP up-projection
-        "linear_fc2",   # Vision MLP down-projection
     )
-    print_trainable_parameters: bool = True
 
-    head_dropout: float = 0.1
+    # --- Vision DoRA/LoRA ---
+    # Independent flag: vision lora only applies when train_vision_encoder=True
+    enable_vision_lora: bool = False
+    vision_lora_r: int = 32           # higher rank: large domain shift
+    vision_lora_alpha: int = 32       # alpha/r = 1.0, conservative with DoRA
+    vision_lora_dropout: float = 0.05
+    vision_use_dora: bool = True      # DoRA for more expressive adaptation
+    vision_lora_target_modules: Tuple[str, ...] = (
+        "qkv",
+        "linear_fc1",
+        "linear_fc2",
+    )
+
+
+    head_dropout: float = 0.3
 
     # ── Quantised loading (BitsAndBytes) ──────────────────────────────────────
     load_in_4bit: bool = False

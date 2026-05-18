@@ -14,9 +14,6 @@ import numpy as np
 _GLOBAL_CODEBOOK = None
 _GLOBAL_CODEBOOK_DEVICE = None
 
-_GLOBAL_CODEBOOK = None
-_GLOBAL_CODEBOOK_DEVICE = None
-
 def _get_codebook(config: VisionLLMLoRAConfig, device: torch.device) -> torch.Tensor:
     global _GLOBAL_CODEBOOK, _GLOBAL_CODEBOOK_DEVICE
     if _GLOBAL_CODEBOOK is None:
@@ -66,6 +63,7 @@ def vision_llm_lora_loss(
     yaw_dist2 = (delta_yaw ** 2).sum(dim=-1)
 
     distances = xy_dist2 + float(getattr(config, "yaw_distance_weight", 2.5)) * yaw_dist2  # (B, K)
+    distances = distances.float()
 
     '''target_ids = distances.argmin(dim=-1)
 
@@ -75,12 +73,48 @@ def vision_llm_lora_loss(
     # Temperature controls sharpness:
     #   low  (0.1) → nearly one-hot, only the closest token is rewarded
     #   high (2.0) → flat, many tokens share credit
-    LABEL_TEMPERATURE = float(getattr(config, "label_temperature", 0.3))
-    soft_labels = F.softmax(-distances / LABEL_TEMPERATURE, dim=-1)  # (B, K)
+    LABEL_TEMPERATURE = float(getattr(config, "label_temperature", 0.7))
+    soft_labels_fp32 = F.softmax(-distances / LABEL_TEMPERATURE, dim=-1).float()  # (B, K)
+    soft_labels = soft_labels_fp32.to(token_logits.dtype)  # (B, K)
 
     # ── Soft cross-entropy ───────────────────────────────────────────────────
     # log_softmax is numerically stable — critical with K = 16 384 entries
     log_probs = F.log_softmax(token_logits, dim=-1)                   # (B, K)
     loss = -(soft_labels * log_probs).sum(dim=-1).mean()
 
-    return loss
+    pred_probs = F.softmax(token_logits.detach().float(), dim=-1)
+    pred_entropy = -(pred_probs * torch.log(pred_probs + 1e-7)).sum(dim=-1).mean()
+
+    ## ADE loss
+    pred_xy = predictions["trajectory"][..., :2]
+    gt_xy = targets["trajectory"][..., :2]
+
+    ade = torch.norm(
+        pred_xy - gt_xy,
+        dim=-1,
+    ).mean()
+
+    ## FDE loss
+
+    pred_final = predictions["trajectory"][:, -1, :2]
+    gt_final = targets["trajectory"][:, -1, :2]
+
+    fde = torch.norm(
+        pred_final - gt_final,
+        dim=-1,
+    ).mean()
+
+    ## TOP-K accuracy for analysis
+
+    #target_ids = distances.argmin(dim=-1)
+
+    #pred_topk = token_logits.topk(k=10, dim=-1).indices
+
+    #top1 = (pred_topk[:, :1] == target_ids[:, None]).any(dim=-1).float().mean()
+
+    #top5 = (pred_topk[:, :5] == target_ids[:, None]).any(dim=-1).float().mean()
+
+    #top10 = (pred_topk[:, :10] == target_ids[:, None]).any(dim=-1).float().mean()
+
+    #return loss, entropy, predictions["attn_weights"], predictions["similarity"], ade, fde
+    return loss, pred_entropy, predictions["similarity"], ade, fde

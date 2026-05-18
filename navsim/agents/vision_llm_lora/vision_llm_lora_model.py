@@ -61,13 +61,9 @@ from navsim.agents.vision_llm_lora.vision_llm_lora_config import VisionLLMLoRACo
 # Special-token name constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TRAJ_TOKEN_TMPL  = "<TRAJ_{idx}>"   # <TRAJ_0> … <TRAJ_16383>
-_EGO_CTX_TOKEN    = "<EGO_CONTEXT>"  # placeholder for ego feature embeddings
-_IMG_CTX_TOKEN    = "<IMG_CONTEXT>"  # placeholder for vision feature embeddings
-_EGO_OPEN_TOKEN   = "<ego>"
-_EGO_CLOSE_TOKEN  = "</ego>"
-_IMG_OPEN_TOKEN   = "<img>"
-_IMG_CLOSE_TOKEN  = "</img>"
+_IMG_CTX_TOKEN = "<IMG_CONTEXT>"
+_IMG_OPEN_TOKEN = "<img>"
+_IMG_CLOSE_TOKEN = "</img>"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Trajectory classifier
@@ -75,15 +71,7 @@ _IMG_CLOSE_TOKEN  = "</img>"
 
 class TrajectoryClassifier(nn.Module):
     """
-    Multi-query trajectory classifier.
-
-    Instead of reading only the final token:
-        outputs.last_hidden_state[:, -1, :]
-
-    we read the final N planner query tokens:
-        outputs.last_hidden_state[:, -num_queries:, :]
-
-    then fuse them before trajectory classification.
+    Planner-query + ego late fusion classifier.
     """
 
     def __init__(
@@ -98,70 +86,126 @@ class TrajectoryClassifier(nn.Module):
 
         self.num_queries = num_queries
 
-        # Fuse multiple planner queries into a single representation
-        self.query_fusion = nn.Sequential(
-            nn.Linear(llm_hidden_size * num_queries, bottleneck_dim),
-            nn.GELU(),
-            nn.Dropout(p=dropout),
+        #self.query_attention = nn.MultiheadAttention(
+        #    embed_dim=llm_hidden_size,
+        #    num_heads=8,
+        #    dropout=0,
+        #    batch_first=True,
+        #)
+
+        fusion_input_dim = (
+            llm_hidden_size * num_queries
+            + llm_hidden_size
         )
 
-        # Final classifier
+        self.query_fusion = nn.Sequential(
+            nn.Linear(fusion_input_dim, bottleneck_dim),
+            nn.RMSNorm(bottleneck_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
         self.classifier = nn.Linear(
             bottleneck_dim,
-            num_trajectories
+            num_trajectories,
         )
 
-    def forward(self, outputs) -> torch.Tensor:
+        #self.query_norm = nn.RMSNorm(
+        #    llm_hidden_size * num_queries
+        #)
 
-        # ------------------------------------------------------------
-        # Extract planner query outputs
-        #
-        # Shape:
-        #   (B, num_queries, hidden_size)
-        # ------------------------------------------------------------
+        self.logit_scale = nn.Parameter(
+            torch.tensor(0.0)
+        )
+
+        #self.query_post_norm = nn.RMSNorm(llm_hidden_size)
+
+    def forward(
+        self,
+        outputs,
+        ego_repr: torch.Tensor,
+    ) -> torch.Tensor:
+
         query_embeddings = outputs.last_hidden_state[
             :, -self.num_queries:, :
         ]
 
-        # ------------------------------------------------------------
-        # Flatten queries
-        #
-        # (B, num_queries, hidden)
-        #   ->
-        # (B, num_queries * hidden)
-        # ------------------------------------------------------------
-        fused_queries = query_embeddings.reshape(
+        #attn_out, attn_weights = self.query_attention(
+        #    query_embeddings,
+        #    query_embeddings,
+        #    query_embeddings,
+        #)
+
+        #query_embeddings = self.query_post_norm(
+        #    query_embeddings + attn_out
+        #)
+
+        planner_repr = query_embeddings.reshape(
             query_embeddings.shape[0],
-            -1
+            -1,
         )
 
-        # ------------------------------------------------------------
-        # Fuse query information
-        # ------------------------------------------------------------
-        fused_queries = self.query_fusion(fused_queries)
+        q = query_embeddings.mean(dim=0).detach()
 
-        # ------------------------------------------------------------
-        # Predict trajectory codebook logits
-        # ------------------------------------------------------------
-        logits = self.classifier(fused_queries)
+        sim = F.cosine_similarity(
+            q[:, None, :],
+            q[None, :, :],
+            dim=-1,
+        )
 
-        return logits
-        #final_embedding = outputs.last_hidden_state.mean(dim=1)
+        # Return only the mean of off-diagonal elements as a scalar
+        mask = ~torch.eye(self.num_queries, dtype=torch.bool, device=q.device)
+        sim_scalar = sim[mask].mean()
+
+        #planner_repr = self.query_norm(planner_repr)
+
+        fused = torch.cat(
+            [planner_repr, ego_repr],
+            dim=-1,
+        )
+
+        fused = self.query_fusion(fused)
+
+        logits = self.classifier(fused)
+        logits = torch.tanh(logits / 30.0) * 30.0
+        scale = self.logit_scale.clamp(-2.0, 2.0).exp()
+        logits = logits * scale
+
+        return logits, sim_scalar
 
 
 # Ego Fusion MLP
 
 
 class EgoFusionMLP(nn.Module):
-    def __init__(self, in_dim: int, bottleneck_dim: int, out_dim: int, dropout: float = 0.0):
+    def __init__(
+        self,
+        in_dim: int,
+        bottleneck_dim: int,
+        out_dim: int,
+        dropout: float = 0.0,
+    ):
         super().__init__()
-        self.fc1 = nn.Linear(in_dim, bottleneck_dim)
-        self.act = nn.GELU()
-        self.dropout = nn.Dropout(p=dropout)
-        self.fc2 = nn.Linear(bottleneck_dim, out_dim)
+
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, bottleneck_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+
+            nn.Linear(bottleneck_dim, out_dim),
+
+            # IMPORTANT:
+            # stabilize ego representation scale
+            nn.RMSNorm(out_dim),
+        )
+
+        # learned scaling
+        self.scale = nn.Parameter(
+            torch.tensor(0.1)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.fc2(self.dropout(self.act(self.fc1(x))))
+        return self.net(x) * self.scale.clamp(min=0.0, max=1.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -206,21 +250,26 @@ class VisionLLMLoRAModel(nn.Module):
 
         # ── 4. Vision encoder extraction & Base Freezing ────────────────────
         self.vision_encoder: nn.Module = self.model.visual
-        if not getattr(config, "train_vision_encoder", False):
-            # Freeze everything including any LoRA adapters on vision
+        if not config.train_vision_encoder:
+
             for p in self.vision_encoder.parameters():
                 p.requires_grad_(False)
-        else:
-            # Training vision encoder — freeze only base weights,
-            # LoRA adapters (added later by get_peft_model) stay trainable
-            # Nothing to do here — get_peft_model handles it in step 5
-            pass
 
-        # ── 5. Optional LoRA ────────────────────────────────────────────────
+        # ── 5. Language part extraction & Base Freezing ────────────────────
+        if not config.train_language_model:
+
+            for p in self.model.language_model.parameters():
+                p.requires_grad_(False)
+
+
+        # ── 6. Optional LoRA ────────────────────────────────────────────────
         if config.enable_lora:
             self._attach_lora(config)
+            # Re-sync: _attach_lora may have replaced self.model.visual
+            # with a PeftModel wrapper; keep the reference consistent.
+            self.vision_encoder = self.model.visual
 
-        # ── 6. Cached references ─────────────────────────────────────────────
+        # ── 7. Cached references ─────────────────────────────────────────────
         self.embedding = self.model.language_model.get_input_embeddings()
         llm_hidden: int = self._hidden_size(self.model)
 
@@ -241,71 +290,85 @@ class VisionLLMLoRAModel(nn.Module):
 
         #self._unfreeze_new_token_embeddings(self._old_vocab_size)
 
-        # ── 7. Token-type bias: 0=text, 1=ego, 2=image ───────────────────────
-        self.token_type_embed = nn.Embedding(3, llm_hidden)
+        # ── 8. Token-type bias: 0=text, 1=ego, 2=image ───────────────────────
+        # self.token_type_embed = nn.Embedding(3, llm_hidden)
 
-        # ── 8. Ego encoders ──────────────────────────────────────────────────
+        # ── 9. Ego encoders ──────────────────────────────────────────────────
         self.velocity_encoder = nn.Sequential(
-            nn.Linear(2, 256), nn.GELU(),
-            nn.Linear(256, llm_hidden), nn.LayerNorm(llm_hidden),
+            nn.Linear(2, 256),
+            nn.GELU(),
+            nn.Linear(256, llm_hidden),
+            nn.RMSNorm(llm_hidden),
         )
+
         self.acceleration_encoder = nn.Sequential(
-            nn.Linear(2, 256), nn.GELU(),
-            nn.Linear(256, llm_hidden), nn.LayerNorm(llm_hidden),
+            nn.Linear(2, 256),
+            nn.GELU(),
+            nn.Linear(256, llm_hidden),
+            nn.RMSNorm(llm_hidden),
         )
-        self.direction_embedding = nn.Embedding(4, llm_hidden)  # 4 driving commands
+
+        self.direction_embedding = nn.Embedding(
+            4,
+            llm_hidden,
+        )
 
         # Fuse [velocity | acceleration | direction] → n_ego_tokens context slots
         bottleneck_dim = 256
-        out_dim = config.n_ego_tokens * llm_hidden
+        out_dim = llm_hidden
 
         self.ego_fusion_mlp = EgoFusionMLP(
             in_dim=3 * llm_hidden,
             bottleneck_dim=bottleneck_dim,
             out_dim=out_dim,
-            dropout=getattr(config, "head_dropout", 0.0),  # 0.0 = no change for old checkpoints
+            dropout=getattr(config, "head_dropout", 0.0),
         )
 
-        # ── 9. Prompt template ───────────────────────────────────────────────
+        # ── 10. Prompt template ───────────────────────────────────────────────
         # Uses Qwen3.5's ChatML template structure
         self._prompt_template = (
             "<|im_start|>system\n"
-            "You are an expert autonomous driving assistant. Your task is to analyze the ego vehicle's current state (velocity, acceleration, and driving command) alongside multi-view camera feeds to safely navigate complex traffic scenarios and avoid collisions.<|im_end|>\n"
+            "You are an expert autonomous driving assistant."
+            "<|im_end|>\n"
+
             "<|im_start|>user\n"
-            "Ego state: <EGO>\n"
+
             "Visual context:\n"
             "<IMG>\n"
-            "Based on the provided visual observations and ego dynamics, predict the safest and most optimal trajectory token index from the trajectory codebook.<|im_end|>\n"
+
+            "Predict the safest trajectory token.\n"
+
+            "<|im_end|>\n"
+
             "<|im_start|>assistant\n"
         )
 
-        # ── 10. Trajectory classifier head (for direct token prediction) ─────────
+        # ── 11. Trajectory classifier head (for direct token prediction) ─────────
         self.num_planner_queries = 4
         self.traj_classifier = TrajectoryClassifier(
             llm_hidden_size=llm_hidden,
             num_trajectories=self.codebook_size,
-            bottleneck_dim=1024,
+            bottleneck_dim=2048,
             dropout=getattr(config, "head_dropout", 0.0),
             num_queries=self.num_planner_queries,
         )
 
-        # ── 11. Planner queries ─────────
+        # ── 12. Planner queries ─────────
+        init_embeds = torch.zeros(self.num_planner_queries, llm_hidden)
+        nn.init.orthogonal_(init_embeds)
+        # scale to match typical embedding magnitude
         with torch.no_grad():
-            random_ids = torch.randint(
-                0,
-                self._old_vocab_size,
-                (self.num_planner_queries,),
-                device=self.embedding.weight.device,
-            )
+            emb_std = self.embedding.weight.std().item()
+        init_embeds = init_embeds * emb_std
 
-            init_embeds = (
-                self.embedding.weight[random_ids]
-                .detach()
-                .float()
-                .clone()
-            )
+        self.planner_queries = nn.Parameter(init_embeds.float())
 
-        self.planner_queries = nn.Parameter(init_embeds)
+        self.query_pos_embed = nn.Parameter(
+            torch.randn(
+                self.num_planner_queries,
+                llm_hidden
+            ) * 0.02
+        )
 
         print("--- TRAINABLE PARAMETERS ---")
         for name, param in self.named_parameters():
@@ -364,24 +427,25 @@ class VisionLLMLoRAModel(nn.Module):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _register_special_tokens(self) -> None:
-        """
-        Register ego/image/trajectory special tokens and resize the embedding table.
 
-        ``self.traj_vocab_ids`` (shape (K,)) maps codebook index k to the
-        corresponding tokenizer vocab ID so we can index logits efficiently.
-        """
         old_vocab_size = len(self.tokenizer)
 
         self.tokenizer.add_special_tokens({
             "additional_special_tokens": [
-                _EGO_OPEN_TOKEN, _EGO_CLOSE_TOKEN, _EGO_CTX_TOKEN,
-                _IMG_OPEN_TOKEN, _IMG_CLOSE_TOKEN, _IMG_CTX_TOKEN,
+                _IMG_OPEN_TOKEN,
+                _IMG_CLOSE_TOKEN,
+                _IMG_CTX_TOKEN,
             ]
         })
-        self.model.resize_token_embeddings(len(self.tokenizer))
 
-        self.ego_ctx_id: int = self.tokenizer.convert_tokens_to_ids(_EGO_CTX_TOKEN)
-        self.img_ctx_id: int = self.tokenizer.convert_tokens_to_ids(_IMG_CTX_TOKEN)
+        self.model.resize_token_embeddings(
+            len(self.tokenizer)
+        )
+
+        self.img_ctx_id = self.tokenizer.convert_tokens_to_ids(
+            _IMG_CTX_TOKEN
+        )
+
         self._old_vocab_size = old_vocab_size
 
     def _unfreeze_new_token_embeddings(self, old_vocab_size: int) -> None:
@@ -426,20 +490,16 @@ class VisionLLMLoRAModel(nn.Module):
     def _attach_lora(self, config: VisionLLMLoRAConfig) -> None:
         if get_peft_model is None:
             raise ImportError("pip install peft")
+
         if config.load_in_4bit or config.load_in_8bit:
             self.model = prepare_model_for_kbit_training(self.model)
 
-        # ── 1. Gradient checkpointing ─────────────────────────────────────────
+        # ── 1. Gradient checkpointing ──────────────────────────────────────────
         self.model.language_model.gradient_checkpointing_enable()
 
-        if getattr(config, "train_vision_encoder", False):
+        if config.train_vision_encoder:
             self.vision_encoder.gradient_checkpointing_enable()
 
-            # Qwen3_5VisionModel does not expose get_input_embeddings so
-            # enable_input_require_grads cannot register its hook automatically.
-            # This breaks gradient checkpointing recomputation at the patch layer.
-            # Fix: manually force the Conv3d output to require grad so the
-            # gradient chain stays connected through recomputed activations.
             def _make_inputs_require_grad(module, input, output):
                 output.requires_grad_(True)
 
@@ -448,29 +508,66 @@ class VisionLLMLoRAModel(nn.Module):
                 .register_forward_hook(_make_inputs_require_grad)
             )
 
-        # ── 2. LLM input grad requirement ────────────────────────────────────
-        if hasattr(self.model, "enable_input_require_grads"):
-            self.model.enable_input_require_grads()
+        # ── 2. Input grad hooks (must happen before PEFT wrapping) ────────────
+        # Required for gradient checkpointing to keep the chain connected
+        # through the embedding → first layer boundary.
+        if hasattr(self.model.language_model, "enable_input_require_grads"):
+            self.model.language_model.enable_input_require_grads()
 
-        # ── 3. Attach LoRA ────────────────────────────────────────────────────
-        targets = (
-            list(config.lora_target_modules)
-            if config.lora_target_modules
+        # ── 3. LLM LoRA ────────────────────────────────────────────────────────
+        llm_targets = (
+            list(config.llm_lora_target_modules)
+            if config.llm_lora_target_modules
             else list(self._default_lora_targets())
         )
-        self.model = get_peft_model(
-            self.model,
-            LoraConfig(
-                r=config.lora_r,
-                lora_alpha=config.lora_alpha,
-                lora_dropout=config.lora_dropout,
-                bias=config.lora_bias,
-                target_modules=targets,
-                task_type=TaskType.FEATURE_EXTRACTION,
-            ),
+
+        llm_lora_config = LoraConfig(
+            r=config.llm_lora_r,
+            lora_alpha=config.llm_lora_alpha,
+            lora_dropout=config.llm_lora_dropout,
+            bias=config.lora_bias,
+            use_dora=config.llm_use_dora,
+            target_modules=llm_targets,
+            task_type=TaskType.FEATURE_EXTRACTION,
         )
+
+        self.model.language_model = get_peft_model(
+            self.model.language_model,
+            llm_lora_config,
+        )
+
         if config.print_trainable_parameters:
-            self.model.print_trainable_parameters()
+            print("=== LLM trainable parameters ===")
+            self.model.language_model.print_trainable_parameters()
+
+        # ── 4. Vision DoRA / LoRA (only if both flags are set) ─────────────────
+        # enable_vision_lora is independent of enable_lora so you can do
+        # LLM-only LoRA in phase 2 and add vision DoRA only in phase 3.
+        if config.enable_vision_lora and config.train_vision_encoder:
+            vision_targets = (
+                list(config.vision_lora_target_modules)
+                if config.vision_lora_target_modules
+                else ["qkv", "linear_fc1", "linear_fc2"]
+            )
+
+            vision_lora_config = LoraConfig(
+                r=config.vision_lora_r,
+                lora_alpha=config.vision_lora_alpha,
+                lora_dropout=config.vision_lora_dropout,
+                bias=config.lora_bias,
+                use_dora=config.vision_use_dora,
+                target_modules=vision_targets,
+                task_type=TaskType.FEATURE_EXTRACTION,
+            )
+
+            self.model.visual = get_peft_model(
+                self.model.visual,
+                vision_lora_config,
+            )
+
+            if config.print_trainable_parameters:
+                print("=== Vision encoder trainable parameters ===")
+                self.model.visual.print_trainable_parameters()
 
     @staticmethod
     def _default_lora_targets() -> Sequence[str]:
@@ -540,16 +637,23 @@ class VisionLLMLoRAModel(nn.Module):
     # Prompt builder
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _build_prompt(self, n_img_tokens: int, n_ego_tokens: int) -> str:
-        ego_block = " ".join([_EGO_CTX_TOKEN] * n_ego_tokens)
-        img_block = " ".join([_IMG_CTX_TOKEN] * n_img_tokens)
-        ego_str   = f"{_EGO_OPEN_TOKEN} {ego_block} {_EGO_CLOSE_TOKEN}"
-        img_str   = f"{_IMG_OPEN_TOKEN} {img_block} {_IMG_CLOSE_TOKEN}"
+    def _build_prompt(self, n_img_tokens: int) -> str:
+
+        img_block = " ".join(
+            [_IMG_CTX_TOKEN] * n_img_tokens
+        )
+
+        img_str = (
+            f"{_IMG_OPEN_TOKEN} "
+            f"{img_block} "
+            f"{_IMG_CLOSE_TOKEN}"
+        )
+
         return (
             self._prompt_template
-            .replace("<EGO>", ego_str)
             .replace("<IMG>", img_str)
         )
+
 
     # ─────────────────────────────────────────────────────────────────────────
     # Input encoding  (shared between training and inference)
@@ -644,106 +748,138 @@ class VisionLLMLoRAModel(nn.Module):
 
 
     def _encode_inputs(
-        self, features: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        dev   = self.embedding.weight.device
+        self,
+        features: Dict[str, torch.Tensor]
+    ):
+
+        dev = self.embedding.weight.device
         dtype = self.embedding.weight.dtype
- 
-        # ── Vision ──────────────────────────────────────────────────────────
-        images = features["camera_feature"].to(dev)   # (B, P, C, H, W)
+
+        # ============================================================
+        # VISION
+        # ============================================================
+
+        images = features["camera_feature"].to(dev)
+
         B = images.shape[0]
-        pixel_values, grid_thw, N, n_vis_per_cam = self._preprocess_images(images)
+
+        pixel_values, grid_thw, N, n_vis_per_cam = (
+            self._preprocess_images(images)
+        )
 
         grad_ctx = (
             torch.enable_grad
-            if getattr(self.config, "train_vision_encoder", False)
+            if self.config.train_vision_encoder
             else torch.no_grad
         )
+
         with grad_ctx():
-            # vis_out: (N * n_vis_per_cam, 2560)  — flat across all cameras
-            vis_out = self.vision_encoder(pixel_values, grid_thw=grid_thw)
-        
+
+            vis_out = self.vision_encoder(
+                pixel_values,
+                grid_thw=grid_thw,
+            )
+
             if not isinstance(vis_out, torch.Tensor):
                 vis_out = vis_out.last_hidden_state
+
             if vis_out.shape[-1] != self.embedding.weight.shape[-1]:
                 vis_out = self.vision_encoder.merger(vis_out)
-        # Reshape: (N * n_vis_per_cam, D) → (B, P * n_vis_per_cam, D)
-        vis_out = vis_out.view(B, -1, vis_out.shape[-1]).to(dtype)  # (B, N_vis, 2560)
- 
-        # ── Ego ─────────────────────────────────────────────────────────────
-        velocity     = features["velocity"].to(dev)
+
+        vis_out = vis_out.view(
+            B,
+            -1,
+            vis_out.shape[-1]
+        ).to(dtype)
+
+        # ============================================================
+        # EGO
+        # ============================================================
+
+        velocity = features["velocity"].to(dev)
         acceleration = features["acceleration"].to(dev)
-        direction    = features["driving_command"].to(dev)
- 
-        enc_v = self.velocity_encoder(velocity).unsqueeze(1)
-        enc_a = self.acceleration_encoder(acceleration).unsqueeze(1)
-        enc_d = self.direction_embedding(direction).unsqueeze(1)
- 
-        ego_flat   = torch.cat([enc_v, enc_a, enc_d], dim=1).reshape(B, -1)  # B already set from images
-        ego_embeds = self.ego_fusion_mlp(ego_flat)
-        ego_embeds = ego_embeds.reshape(B, self.config.n_ego_tokens, -1).to(dtype)
- 
-        # ── Tokenise prompt ──────────────────────────────────────────────────
+        direction = features["driving_command"].to(dev)
+
+        enc_v = self.velocity_encoder(velocity)
+        enc_a = self.acceleration_encoder(acceleration)
+        enc_d = self.direction_embedding(direction)
+
+        ego_flat = torch.cat(
+            [enc_v, enc_a, enc_d],
+            dim=-1,
+        )
+
+        ego_repr = self.ego_fusion_mlp(
+            ego_flat
+        ).to(dtype)
+
+        # ============================================================
+        # PROMPT
+        # ============================================================
+
         n_img = vis_out.shape[1]
-        n_ego = ego_embeds.shape[1]
-        cache_key = (n_img, n_ego)
+
+        cache_key = n_img
+
         if cache_key not in self._prompt_cache:
-            prompt_str = self._build_prompt(n_img, n_ego)
-            tok = self.tokenizer(prompt_str, return_tensors="pt",
-                                padding=True, add_special_tokens=True)
+
+            prompt_str = self._build_prompt(n_img)
+
+            tok = self.tokenizer(
+                prompt_str,
+                return_tensors="pt",
+                padding=True,
+                add_special_tokens=True,
+            )
+
             self._prompt_cache[cache_key] = (
                 tok["input_ids"].to(dev),
                 tok["attention_mask"].to(dev),
             )
-        prompt_ids, prompt_mask = self._prompt_cache[cache_key]
+
+        prompt_ids, prompt_mask = (
+            self._prompt_cache[cache_key]
+        )
+
         prompt_ids  = prompt_ids.to(dev).expand(B, -1)
         prompt_mask = prompt_mask.to(dev).expand(B, -1)
- 
-        # ── Inject features at placeholder positions ─────────────────────────
-        ego_pos = prompt_ids == self.ego_ctx_id
+
+        # ============================================================
+        # IMAGE INJECTION ONLY
+        # ============================================================
+
         img_pos = prompt_ids == self.img_ctx_id
- 
-        if ego_pos.sum().item() != B * n_ego:
-            raise RuntimeError(
-                f"Ego alignment error: expected {B * n_ego} tokens, "
-                f"got {ego_pos.sum().item()}."
-            )
-        if img_pos.sum().item() != B * n_img:
-            raise RuntimeError(
-                f"Image alignment error: expected {B * n_img} tokens, "
-                f"got {img_pos.sum().item()}."
-            )
- 
-        type_ids = torch.zeros_like(prompt_ids)
-        type_ids[ego_pos] = 1
-        type_ids[img_pos] = 2
-        type_embeds = self.token_type_embed(type_ids).to(dtype)
- 
-        # Build full prompt embeddings without in-place ops
-        prompt_embeds = self.embedding(prompt_ids).clone()
 
-        # Expand ego and image features to full sequence shape
-        ego_expanded = torch.zeros_like(prompt_embeds)
-        img_expanded = torch.zeros_like(prompt_embeds)
+        prompt_embeds = self.embedding(
+            prompt_ids
+        ).clone()
 
-        ego_expanded[ego_pos] = ego_embeds.reshape(-1, ego_embeds.shape[-1])
-        img_expanded[img_pos] = vis_out.reshape(-1, vis_out.shape[-1])
+        img_expanded = torch.zeros_like(
+            prompt_embeds
+        )
 
-        # Combine using masks — no in-place modification of prompt_embeds
-        ego_mask = ego_pos.unsqueeze(-1).expand_as(prompt_embeds)
-        img_mask = img_pos.unsqueeze(-1).expand_as(prompt_embeds)
+        img_expanded[img_pos] = vis_out.reshape(
+            -1,
+            vis_out.shape[-1]
+        )
 
-        prompt_embeds = torch.where(ego_mask, ego_expanded, prompt_embeds)
-        prompt_embeds = torch.where(img_mask, img_expanded, prompt_embeds)
-        prompt_embeds = prompt_embeds + type_embeds
+        img_mask = img_pos.unsqueeze(-1).expand_as(
+            prompt_embeds
+        )
 
-        # =========================================================
-        # Append learned planner queries
-        # =========================================================
+        prompt_embeds = torch.where(
+            img_mask,
+            img_expanded,
+            prompt_embeds,
+        )
 
-        planner_queries = self.planner_queries.unsqueeze(0).expand(
-            B, -1, -1
-        )  # (B, num_queries, hidden)
+        # ============================================================
+        # APPEND PLANNER QUERIES
+        # ============================================================
+
+        planner_queries = (
+            self.planner_queries + self.query_pos_embed
+        ).unsqueeze(0).expand(B, -1, -1)
 
         prompt_embeds = torch.cat(
             [prompt_embeds, planner_queries],
@@ -762,7 +898,11 @@ class VisionLLMLoRAModel(nn.Module):
             dim=1,
         )
 
-        return prompt_embeds, prompt_mask
+        return (
+            prompt_embeds,
+            prompt_mask,
+            ego_repr,
+        )
 
 
 
@@ -771,17 +911,18 @@ class VisionLLMLoRAModel(nn.Module):
     # ─────────────────────────────────────────────────────────────────────────
 
     def forward(
-        self, 
-        features: Dict[str, torch.Tensor], 
-        teacher_forcing_seq=None, 
-        teacher_forcing_ratio=1.0
-        ) -> Dict[str, torch.Tensor]:
-        """
-        """
-        # Encode features (extracts vision/ego and places them into the sequence)
-        prompt_embeds, prompt_mask = self._encode_inputs(features)
+        self,
+        features,
+        teacher_forcing_seq=None,
+        teacher_forcing_ratio=1.0,
+    ):
 
-        # Qwen3.5 LLM expects 'inputs_embeds'
+        (
+            prompt_embeds,
+            prompt_mask,
+            ego_repr,
+        ) = self._encode_inputs(features)
+
         outputs = self.model.language_model(
             inputs_embeds=prompt_embeds,
             attention_mask=prompt_mask,
@@ -789,12 +930,21 @@ class VisionLLMLoRAModel(nn.Module):
             use_cache=False,
         )
 
-        traj_logits = self.traj_classifier(outputs)  # (B, K)
-        best_cb_ids = traj_logits.argmax(dim=-1)                         # (B,)
-        trajectory  = self.decode_trajectory(best_cb_ids)                # (B, 8, 3)
+        traj_logits, sim = self.traj_classifier(
+            outputs,
+            ego_repr,
+        )
+
+        best_cb_ids = traj_logits.argmax(dim=-1)
+
+        trajectory = self.decode_trajectory(
+            best_cb_ids
+        )
 
         return {
-            "trajectory_logits": traj_logits,   # (B, K)
-            "trajectory_tokens": best_cb_ids,  # (B,)
-            "trajectory": trajectory,    # (B, 8, 3)
+            "trajectory_logits": traj_logits,
+            "trajectory_tokens": best_cb_ids,
+            "trajectory": trajectory,
+            #"attn_weights": attn_weights,
+            "similarity": sim,
         }

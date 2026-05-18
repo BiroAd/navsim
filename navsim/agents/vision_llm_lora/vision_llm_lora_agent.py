@@ -108,184 +108,125 @@ class VisionLLMLoRAAgent(AbstractAgent):
         if not trainable_params:
             raise RuntimeError("No trainable parameters found. Check LoRA setup and freezing strategy.")
 
-        '''decay_params = []
-        no_decay_params = []
+        traj_named   = []
+        ego_named    = []
+        lang_named   = []
+        vision_named = []
+        other_named  = []
+
 
         for name, param in self.named_parameters():
             if not param.requires_grad:
                 continue
-            if "bias" in name or "norm" in name or "LayerNorm" in name:
-                no_decay_params.append(param)
-            else:
-                decay_params.append(param)'''
 
-        traj_head_named_params = []
-        lang_lora_named_params = []
-        vision_lora_named_params = []
-        ego_named_params = []
+            if (
+                "traj_classifier" in name
+                or "planner_queries" in name
+                or "query_pos_embed" in name
+            ):
+                traj_named.append((name, param))
 
-        for name, param in self.named_parameters():
-
-            if not param.requires_grad:
-                continue
-
-            # ---- Trajectory head ----
-            if "traj_classifier" in name or "planner_queries" in name:
-                traj_head_named_params.append((name, param))
-
-            # ---- Ego modules ----
             elif (
                 "velocity_encoder" in name
                 or "acceleration_encoder" in name
                 or "direction_embedding" in name
                 or "ego_fusion_mlp" in name
-                or "token_type_embed" in name
             ):
-                ego_named_params.append((name, param))
+                ego_named.append((name, param))
 
-            # ---- Vision LoRA ----
             elif "lora" in name and "visual" in name:
-                vision_lora_named_params.append((name, param))
+                vision_named.append((name, param))
 
-            # ---- Language LoRA ----
             elif "lora" in name:
-                lang_lora_named_params.append((name, param))
+                lang_named.append((name, param))
+
+            else:
+                # Catch-all: new token embeddings, token_type_embed, etc.
+                other_named.append((name, param))
             
-        traj_decay, traj_no_decay = self.split_decay_params(traj_head_named_params)
+        traj_decay, traj_no_decay = self.split_decay_params(traj_named)
+        ego_decay, ego_no_decay = self.split_decay_params(ego_named)
+        lang_decay, lang_no_decay = self.split_decay_params(lang_named)
+        vision_decay, vision_no_decay = self.split_decay_params(vision_named)
+        other_decay, other_no_decay = self.split_decay_params(other_named)
 
-        lang_decay, lang_no_decay = self.split_decay_params(lang_lora_named_params)
+        # ── LR multipliers ────────────────────────────────────────────────────
+        # Stage 1 (heads only, LLM frozen): lr_base should be ~5e-3
+        #   traj and ego are from scratch → full base LR
+        #   lang/vision will be empty → no effect
+        #
+        # Stage 2 (LoRA fine-tune): lr_base should be ~5e-4
+        #   traj and ego already warm → reduced multiplier
+        #   lang/vision pretrained → conservative multiplier
+        traj_lr = self._config.traj_lr_multiplier * self._lr_base   # stage1: 1.0, stage2: 0.4
+        ego_lr = self._config.ego_lr_multiplier * self._lr_base   # stage1: 1.0, stage2: 0.5
+        lang_lr = self._config.lang_lr_multiplier * self._lr_base   # stage1: 0.0 (empty), stage2: 0.1
+        vision_lr = self._config.vision_lr_multiplier * self._lr_base   # stage1: 0.0 (empty), stage2: 0.05
 
-        vision_decay, vision_no_decay = self.split_decay_params(vision_lora_named_params)
+        param_groups = []
 
-        ego_decay, ego_no_decay = self.split_decay_params(ego_named_params)
+        def _add_group(decay_params, no_decay_params, lr, weight_decay):
+            if decay_params:
+                param_groups.append({
+                    "params": decay_params,
+                    "lr": lr,
+                    "weight_decay": weight_decay,
+                })
+            if no_decay_params:
+                param_groups.append({
+                    "params": no_decay_params,
+                    "lr": lr,
+                    "weight_decay": 0.0,
+                })
+        
+        _add_group(traj_decay, traj_no_decay, traj_lr, 0.05)
+        _add_group(ego_decay, ego_no_decay, ego_lr, 0.01)
+        _add_group(lang_decay, lang_no_decay, lang_lr, 0.01)
+        _add_group(vision_decay, vision_no_decay, vision_lr, 0.01)
+        _add_group(other_decay, other_no_decay, ego_lr, 0.01)
+
+
+        if not param_groups:
+            raise RuntimeError("No trainable parameters found.")
 
         optimizer = torch.optim.AdamW(
-            [
-                # ==================================================
-                # Trajectory head
-                # ==================================================
-                {
-                    "params": traj_decay,
-                    "lr": 0.4 * self._lr_base,
-                    "weight_decay": 0.05,
-                },
-                {
-                    "params": traj_no_decay,
-                    "lr": 0.4 * self._lr_base,
-                    "weight_decay": 0.0,
-                },
-
-                # ==================================================
-                # Language LoRA
-                # ==================================================
-                {
-                    "params": lang_decay,
-                    "lr": 0.1 * self._lr_base,
-                    "weight_decay": 0.01,
-                },
-                {
-                    "params": lang_no_decay,
-                    "lr": 0.1 * self._lr_base,
-                    "weight_decay": 0.0,
-                },
-
-                # ==================================================
-                # Vision LoRA
-                # ==================================================
-                {
-                    "params": vision_decay,
-                    "lr": 0.05 * self._lr_base,
-                    "weight_decay": 0.01,
-                },
-                {
-                    "params": vision_no_decay,
-                    "lr": 0.05 * self._lr_base,
-                    "weight_decay": 0.0,
-                },
-
-                # ==================================================
-                # Ego modules
-                # ==================================================
-                {
-                    "params": ego_decay,
-                    "lr": 0.5 * self._lr_base,
-                    "weight_decay": 0.01,
-                },
-                {
-                    "params": ego_no_decay,
-                    "lr": 0.5 * self._lr_base,
-                    "weight_decay": 0.0,
-                },
-            ],
+            param_groups,
             betas=(0.9, 0.95),
             eps=1e-8,
         )
+
         """optimizer = torch.optim.AdamW([
             {"params": decay_params,    "weight_decay": 0.01},
             {"params": no_decay_params, "weight_decay": 0.0},
         ], lr=self._lr_base)    """
 
-        total_params = 0
-
-        for group in optimizer.param_groups:
-            total_params += sum(p.numel() for p in group["params"])
-
+        total_params = sum(
+        p.numel() for g in param_groups for p in g["params"]
+        )
         print(f"Optimizer parameters: {total_params:,}")
 
-        def build_lambda(initial_lr: float, final_lr: float):
 
-            final_ratio = final_lr / initial_lr
+        def build_lambda(group_lr: float) -> callable:
+            final_ratio = self._lr_final / self._lr_base
 
-            def lr_lambda(step: int):
-
+            def lr_lambda(step: int) -> float:
                 if step < warmup_steps:
                     return float(step) / float(max(1, warmup_steps))
-
-                decay_ratio = (
-                    (step - warmup_steps)
-                    / float(max(1, total_steps - warmup_steps))
+                decay_ratio = (step - warmup_steps) / float(
+                    max(1, total_steps - warmup_steps)
                 )
-
                 decay_ratio = min(max(decay_ratio, 0.0), 1.0)
-
                 cosine_decay = 0.5 * (1 + math.cos(math.pi * decay_ratio))
-
                 return final_ratio + (1.0 - final_ratio) * cosine_decay
 
             return lr_lambda
-                
-        traj_initial = 0.4 * self._lr_base
-        lang_initial = 0.1 * self._lr_base
-        vision_initial = 0.05 * self._lr_base
-        ego_initial = 0.5 * self._lr_base
-
-        traj_final = 0.4 * self._lr_final
-        lang_final = 0.1 * self._lr_final
-        vision_final = 0.05 * self._lr_final
-        ego_final = 0.5 * self._lr_final
-
-        traj_lambda = build_lambda(traj_initial, traj_final)
-        lang_lambda = build_lambda(lang_initial, lang_final)
-        vision_lambda = build_lambda(vision_initial, vision_final)
-        ego_lambda = build_lambda(ego_initial, ego_final)
-
+        
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
-            lr_lambda=[
-                traj_lambda,
-                traj_lambda,
-
-                lang_lambda,
-                lang_lambda,
-
-                vision_lambda,
-                vision_lambda,
-
-                ego_lambda,
-                ego_lambda,
-            ]
+            lr_lambda=[build_lambda(g["lr"]) for g in param_groups],
         )
 
+                
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
