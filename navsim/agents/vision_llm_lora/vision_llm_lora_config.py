@@ -17,16 +17,16 @@ class VisionLLMLoRAConfig:
     total_training_steps: int = 10639
     #total_training_steps: int = 21278
     #total_training_steps: int = 21
-    num_epochs: int = 10
+    num_epochs: int = 8
     gradient_accumulation_steps: int = 16
-    warmup_ratio: float = 0.05
+    warmup_ratio: float = 0.1
 
     # Stage 1 values:  traj=1.0, ego=1.0, lang=0.0, vision=0.0
     # Stage 2 values:  traj=0.4, ego=0.5, lang=0.1, vision=0.05
-    traj_lr_multiplier:   float = 1.0
-    ego_lr_multiplier:    float = 1.0
-    lang_lr_multiplier:   float = 0.0
-    vision_lr_multiplier: float = 0.0
+    traj_lr_multiplier:   float = 0.10
+    ego_lr_multiplier:    float = 0.12 # 0.15 was before
+    lang_lr_multiplier:   float = 0.08 # 0.2 was before
+    vision_lr_multiplier: float = 0.25
 
     # ── Trajectory codebook ───────────────────────────────────────────────────
     # Path to an (N, 3) NumPy array; each row is one (x, y, yaw) candidate
@@ -68,10 +68,10 @@ class VisionLLMLoRAConfig:
     print_trainable_parameters: bool = True
 
     # --- LLM LoRA ---
-    llm_lora_r: int = 16
-    llm_lora_alpha: int = 32          # alpha/r = 2.0
-    llm_lora_dropout: float = 0.05
-    llm_use_dora: bool = False        # standard LoRA is enough for routing
+    llm_lora_r: int = 32
+    llm_lora_alpha: int = 64          # alpha/r = 2.0
+    llm_lora_dropout: float = 0.10
+    llm_use_dora: bool = False       # standard LoRA is enough for routing
     llm_lora_target_modules: Tuple[str, ...] = (
         "q_proj",
         "k_proj",
@@ -85,18 +85,19 @@ class VisionLLMLoRAConfig:
     # --- Vision DoRA/LoRA ---
     # Independent flag: vision lora only applies when train_vision_encoder=True
     enable_vision_lora: bool = False
-    vision_lora_r: int = 32           # higher rank: large domain shift
-    vision_lora_alpha: int = 32       # alpha/r = 1.0, conservative with DoRA
-    vision_lora_dropout: float = 0.05
-    vision_use_dora: bool = True      # DoRA for more expressive adaptation
+    vision_lora_r: int = 64           # higher rank: large domain shift
+    vision_lora_alpha: int = 128       # alpha/r = 1.0, conservative with DoRA
+    vision_lora_dropout: float = 0.10
+    vision_use_dora: bool = False      # DoRA for more expressive adaptation
     vision_lora_target_modules: Tuple[str, ...] = (
-        "qkv",
-        "linear_fc1",
+        "attn.qkv",
+        "attn.proj",   # Safely restores the 3.1M attention output parameters!
+        "linear_fc1",  # Double check that this is spelled correctly in your code!
         "linear_fc2",
     )
 
 
-    head_dropout: float = 0.3
+    head_dropout: float = 0.20
 
     # ── Quantised loading (BitsAndBytes) ──────────────────────────────────────
     load_in_4bit: bool = False

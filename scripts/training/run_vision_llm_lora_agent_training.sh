@@ -9,4 +9,4 @@ agent.checkpoint_path=\'/root/workdir/biroa/navsim/exp/training_vision_llm_lora_
 experiment_name=training_vision_llm_lora_agent \
 train_test_split=$TRAIN_TEST_SPLIT \
 cache_path=$CACHE_PATH \
-> vision_lora_training_output11.log 2>&1 &
+> vision_lora_training_output12.log 2>&1 &

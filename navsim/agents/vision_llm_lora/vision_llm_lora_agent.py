@@ -42,26 +42,66 @@ class VisionLLMLoRAAgent(AbstractAgent):
         return self.__class__.__name__
 
     def initialize(self) -> None:
-        """Load checkpoint into agent if path is provided."""
         if self._checkpoint_path is None:
             return
 
-        if torch.cuda.is_available():
-            state_dict: Dict[str, Any] = torch.load(self._checkpoint_path)["state_dict"]
-        else:
-            state_dict = torch.load(self._checkpoint_path, map_location="cpu")["state_dict"]
+        # Safely load to CPU RAM first
+        checkpoint = torch.load(
+            self._checkpoint_path, 
+            map_location="cpu", 
+            weights_only=True
+        )
+        state_dict = checkpoint["state_dict"]
 
         remapped = {}
         for key, value in state_dict.items():
+            # 1. Strip top-level wrappers
             key_new = key.replace("agent.", "")
             key_new = key_new.replace("_vlm_model._orig_mod.", "_vlm_model.")
+            
+            # 2. DEDUPLICATION LOGIC:
+            # If PyTorch saved BOTH vision_encoder and model.visual, 
+            # force them all into the exact same model.visual namespace.
+            if key_new.startswith("_vlm_model.vision_encoder."):
+                key_new = key_new.replace("_vlm_model.vision_encoder.", "_vlm_model.model.visual.")
+
+            # 3. Handle PEFT base_model wrapping if transitioning into a LoRA phase
+            # (e.g., if you are wrapping the vision model in PEFT for this phase)
+            # key_new = key_new.replace("model.visual.", "model.visual.base_model.model.")
+
             remapped[key_new] = value
 
-        missing_keys, unexpected_keys = self.load_state_dict(remapped, strict=False)
+        # Explicitly define ALL components that must survive the filter
+        # Explicitly define ONLY the custom heads/embeddings that must survive
+        CUSTOM_PREFIXES = (
+            "_vlm_model.traj_classifier.",
+            "_vlm_model.ego_fusion_mlp.",
+            "_vlm_model.velocity_encoder.",
+            "_vlm_model.acceleration_encoder.",
+            "_vlm_model.direction_embedding.",
+            "_vlm_model.planner_queries",
+            "_vlm_model.query_pos_embed",
+        )
+
+        # Filter out random optimizer states or discarded pre-training heads
+        filtered = {
+            k: v for k, v in remapped.items()
+            if any(k.startswith(p) for p in CUSTOM_PREFIXES) or "lora_" in k
+        }
+
+        print(f"Loaded keys: {list(filtered.keys())}")
+
+        # Inject the weights into the empty architecture
+        missing_keys, unexpected_keys = self.load_state_dict(filtered, strict=False)
+        
+        print(f"Loaded {len(filtered)} keys from checkpoint")
         if missing_keys:
-            print("Missing keys:", missing_keys)
+            print(f"Missing keys ({len(missing_keys)}):", missing_keys)
         if unexpected_keys:
-            print("Unexpected keys:", unexpected_keys)
+            print(f"Unexpected keys ({len(unexpected_keys)}):", unexpected_keys)
+
+        # Ensure the model is moved to GPU for inference since we don't use PL Trainer here
+        self.cuda()
 
     def get_sensor_config(self) -> SensorConfig:
         history_steps = [3]
@@ -179,11 +219,11 @@ class VisionLLMLoRAAgent(AbstractAgent):
                     "weight_decay": 0.0,
                 })
         
-        _add_group(traj_decay, traj_no_decay, traj_lr, 0.05)
+        _add_group(traj_decay, traj_no_decay, traj_lr, 0.01)
         _add_group(ego_decay, ego_no_decay, ego_lr, 0.01)
         _add_group(lang_decay, lang_no_decay, lang_lr, 0.01)
         _add_group(vision_decay, vision_no_decay, vision_lr, 0.01)
-        _add_group(other_decay, other_no_decay, ego_lr, 0.01)
+        _add_group(other_decay, other_no_decay, lang_lr, 0.0)
 
 
         if not param_groups:
@@ -192,7 +232,7 @@ class VisionLLMLoRAAgent(AbstractAgent):
         optimizer = torch.optim.AdamW(
             param_groups,
             betas=(0.9, 0.95),
-            eps=1e-8,
+            eps=1e-5,
         )
 
         """optimizer = torch.optim.AdamW([
@@ -262,6 +302,8 @@ class VisionLLMLoRAAgent(AbstractAgent):
                 or "layernorm" in name_lower
                 or "ln_" in name_lower
                 or "rmsnorm" in name_lower
+                or "magnitude" in name_lower
+                or "lora_b" in name_lower
             ):
                 no_decay.append(param)
             else:
@@ -281,7 +323,7 @@ class VisionLLMLoRAAgent(AbstractAgent):
 
         features = {k: (v.unsqueeze(0).to(self.device) if isinstance(v, torch.Tensor) else v) for k, v in features.items()}
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.float16):
             predictions = self.forward(features, teacher_forcing_seq=None, teacher_forcing_ratio=1.0)
             poses = predictions["trajectory"].squeeze(0).cpu().numpy()
 

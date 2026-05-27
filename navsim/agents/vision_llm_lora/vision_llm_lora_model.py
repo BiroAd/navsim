@@ -56,6 +56,76 @@ except ImportError:
 
 from navsim.agents.vision_llm_lora.vision_llm_lora_config import VisionLLMLoRAConfig
 
+'''from peft.tuners.lora.layer import LoraLayer
+
+def stable_get_weight_norm(self, weight, lora_weight, scaling) -> torch.Tensor:
+    # 1. Disable autocast so PL doesn't force this back to fp16
+    with torch.autocast(device_type=weight.device.type, enabled=False):
+        # 2. Upcast to fp32
+        weight = weight.float()
+        lora_weight = lora_weight.float()
+        
+        # 3. Compute norm safely
+        V = weight + lora_weight * scaling
+        norm = torch.linalg.norm(V, dim=0, keepdim=True).clamp_min(1e-8)
+        
+        # 4. Cast back to fp16
+        return (V / norm).to(weight.dtype)
+
+# Apply globally BEFORE initializing the model
+LoraLayer.get_weight_norm = stable_get_weight_norm'''
+
+'''def patch_dora_for_fp16(model: torch.nn.Module) -> None:
+    patched = 0
+    for name, module in model.named_modules():
+        if not hasattr(module, 'lora_magnitude_vector'):
+            continue
+
+        # Cast magnitude vectors to fp32 (already in your code — keep this)
+        for adapter_name, mag_layer in module.lora_magnitude_vector.items():
+            mag_layer.weight.data = mag_layer.weight.data.float()
+
+        # --- THE REAL FIX: patch the norm that runs during forward ---
+        # PEFT calls _get_weight_norm() every forward pass.
+        # Without this, norm underflows in FP16 → division by ~0 → NaN.
+        if hasattr(module, '_get_weight_norm'):
+            _patch_weight_norm(module)
+        else:
+            # Fallback for PEFT versions that inline the norm computation
+            _patch_dora_forward(module)
+
+        patched += 1
+
+    print(f"DoRA layers stabilized (forward path): {patched}")
+
+
+def _patch_weight_norm(module) -> None:
+    """Patch PEFT's _get_weight_norm to compute in FP32."""
+    original = module._get_weight_norm
+
+    def stable_get_weight_norm(weight, lora_weight, scaling):
+        # Upcast to FP32 for the norm — tiny VRAM cost, eliminates NaN
+        V = weight.float() + lora_weight.float() * scaling
+        norm = V.norm(p=2, dim=0, keepdim=True).clamp(min=1e-8)
+        return (V / norm).to(weight.dtype)
+
+    module._get_weight_norm = stable_get_weight_norm
+
+
+def _patch_dora_forward(module) -> None:
+    """Fallback: wrap the whole forward in FP32 for modules that inline norms."""
+    original_forward = module.forward
+
+    def stable_forward(x, *args, **kwargs):
+        orig_dtype = x.dtype
+        # Only upcast if we're in FP16 and the module has DoRA
+        if orig_dtype == torch.float16:
+            out = original_forward(x.float(), *args, **kwargs)
+            return out.to(orig_dtype)
+        return original_forward(x, *args, **kwargs)
+
+    module.forward = stable_forward'''
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Special-token name constants
@@ -145,13 +215,23 @@ class TrajectoryClassifier(nn.Module):
             -1,
         )
 
+        # similarity
         q = query_embeddings.mean(dim=0).detach()
 
         sim = F.cosine_similarity(
             q[:, None, :],
             q[None, :, :],
             dim=-1,
+            eps=1e-5,
         )
+
+        # Measure variance across batch — should be high if scene-sensitive
+        query_variance = query_embeddings.var(dim=0).mean().detach()
+
+        # Variance scale
+        with torch.no_grad():
+            hidden_scale = query_embeddings.detach().pow(2).mean().sqrt()  # RMS magnitude
+            relative_variance = query_embeddings.var(dim=0).mean() / (hidden_scale ** 2)
 
         # Return only the mean of off-diagonal elements as a scalar
         mask = ~torch.eye(self.num_queries, dtype=torch.bool, device=q.device)
@@ -171,7 +251,7 @@ class TrajectoryClassifier(nn.Module):
         scale = self.logit_scale.clamp(-2.0, 2.0).exp()
         logits = logits * scale
 
-        return logits, sim_scalar
+        return logits, sim_scalar, query_variance, relative_variance
 
 
 # Ego Fusion MLP
@@ -249,15 +329,12 @@ class VisionLLMLoRAModel(nn.Module):
         self._register_special_tokens()
 
         # ── 4. Vision encoder extraction & Base Freezing ────────────────────
-        self.vision_encoder: nn.Module = self.model.visual
         if not config.train_vision_encoder:
-
-            for p in self.vision_encoder.parameters():
+            for p in self.model.visual.parameters():
                 p.requires_grad_(False)
 
         # ── 5. Language part extraction & Base Freezing ────────────────────
         if not config.train_language_model:
-
             for p in self.model.language_model.parameters():
                 p.requires_grad_(False)
 
@@ -265,16 +342,13 @@ class VisionLLMLoRAModel(nn.Module):
         # ── 6. Optional LoRA ────────────────────────────────────────────────
         if config.enable_lora:
             self._attach_lora(config)
-            # Re-sync: _attach_lora may have replaced self.model.visual
-            # with a PeftModel wrapper; keep the reference consistent.
-            self.vision_encoder = self.model.visual
 
         # ── 7. Cached references ─────────────────────────────────────────────
         self.embedding = self.model.language_model.get_input_embeddings()
         llm_hidden: int = self._hidden_size(self.model)
 
         # Derive patch constants from the Conv3d kernel so nothing is hardcoded.
-        conv = self.vision_encoder.patch_embed.proj          # Conv3d
+        conv = self.model.visual.patch_embed.proj          # Conv3d
         self._patch_size     = conv.kernel_size[1]           # 16
         self._temporal_size  = conv.kernel_size[0]           # 2  (frames per temporal patch)
         self._patch_dim      = (
@@ -284,8 +358,8 @@ class VisionLLMLoRAModel(nn.Module):
             * self._patch_size
         )  # 3 * 2 * 16 * 16 = 1536
         self._merger_factor = (
-            self.vision_encoder.merger.linear_fc1.in_features
-            // self.vision_encoder.merger.norm.normalized_shape[0]
+            self.model.visual.merger.linear_fc1.in_features
+            // self.model.visual.merger.norm.normalized_shape[0]
         )
 
         #self._unfreeze_new_token_embeddings(self._old_vocab_size)
@@ -375,6 +449,16 @@ class VisionLLMLoRAModel(nn.Module):
             if param.requires_grad:
                 print(f"{name}: {param.numel():,} parameters")
         print("----------------------------")
+
+        print("=== Vision encoder linear layers ===")
+        for name, module in self.model.visual.named_modules(): # <-- Added self, changed to visual
+            if isinstance(module, torch.nn.Linear):
+                print(f"{name}: {module.weight.shape}")
+                
+        print("=== LLM LoRA layers ===")
+        for name, module in self.model.language_model.named_modules(): # <-- Added self, changed to language_model
+            if isinstance(module, torch.nn.Linear):
+                print(f"{name}: {module.weight.shape}")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Codebook initialisation
@@ -471,6 +555,7 @@ class VisionLLMLoRAModel(nn.Module):
 
     def _build_llm(self, config: VisionLLMLoRAConfig) -> nn.Module:
         kwargs: Dict = {"trust_remote_code": True}
+
         if config.load_in_4bit or config.load_in_8bit:
             if BitsAndBytesConfig is None:
                 raise ImportError("Update transformers to get BitsAndBytesConfig.")
@@ -494,27 +579,8 @@ class VisionLLMLoRAModel(nn.Module):
         if config.load_in_4bit or config.load_in_8bit:
             self.model = prepare_model_for_kbit_training(self.model)
 
-        # ── 1. Gradient checkpointing ──────────────────────────────────────────
-        self.model.language_model.gradient_checkpointing_enable()
+        # ── 1. PEFT wrapping FIRST (restructures the model before any hooks) ───
 
-        if config.train_vision_encoder:
-            self.vision_encoder.gradient_checkpointing_enable()
-
-            def _make_inputs_require_grad(module, input, output):
-                output.requires_grad_(True)
-
-            self._vision_grad_hook = (
-                self.vision_encoder.patch_embed.proj
-                .register_forward_hook(_make_inputs_require_grad)
-            )
-
-        # ── 2. Input grad hooks (must happen before PEFT wrapping) ────────────
-        # Required for gradient checkpointing to keep the chain connected
-        # through the embedding → first layer boundary.
-        if hasattr(self.model.language_model, "enable_input_require_grads"):
-            self.model.language_model.enable_input_require_grads()
-
-        # ── 3. LLM LoRA ────────────────────────────────────────────────────────
         llm_targets = (
             list(config.llm_lora_target_modules)
             if config.llm_lora_target_modules
@@ -530,7 +596,6 @@ class VisionLLMLoRAModel(nn.Module):
             target_modules=llm_targets,
             task_type=TaskType.FEATURE_EXTRACTION,
         )
-
         self.model.language_model = get_peft_model(
             self.model.language_model,
             llm_lora_config,
@@ -540,16 +605,12 @@ class VisionLLMLoRAModel(nn.Module):
             print("=== LLM trainable parameters ===")
             self.model.language_model.print_trainable_parameters()
 
-        # ── 4. Vision DoRA / LoRA (only if both flags are set) ─────────────────
-        # enable_vision_lora is independent of enable_lora so you can do
-        # LLM-only LoRA in phase 2 and add vision DoRA only in phase 3.
         if config.enable_vision_lora and config.train_vision_encoder:
             vision_targets = (
                 list(config.vision_lora_target_modules)
                 if config.vision_lora_target_modules
                 else ["qkv", "linear_fc1", "linear_fc2"]
             )
-
             vision_lora_config = LoraConfig(
                 r=config.vision_lora_r,
                 lora_alpha=config.vision_lora_alpha,
@@ -559,15 +620,72 @@ class VisionLLMLoRAModel(nn.Module):
                 target_modules=vision_targets,
                 task_type=TaskType.FEATURE_EXTRACTION,
             )
-
             self.model.visual = get_peft_model(
                 self.model.visual,
                 vision_lora_config,
             )
 
+            #patch_dora_for_fp16(self.model.visual)
+
             if config.print_trainable_parameters:
                 print("=== Vision encoder trainable parameters ===")
                 self.model.visual.print_trainable_parameters()
+
+            dora_layers_patched = 0
+            for name, module in self.model.visual.named_modules():
+                if hasattr(module, 'lora_magnitude_vector') and len(module.lora_magnitude_vector) > 0:
+                    dora_layers_patched += 1
+
+            print(f"DoRA layers patched: {dora_layers_patched}")
+
+        # ── 2. Gradient checkpointing AFTER PEFT wrapping ─────────────────────
+
+        self.model.language_model.gradient_checkpointing_enable()
+
+        if config.train_vision_encoder:
+            self.model.visual.gradient_checkpointing_enable()
+
+            # ── 3. Kwargs stripper on the NOW-WRAPPED blocks ───────────────────
+            # After get_peft_model, blocks live at base_model.model.blocks
+            try:
+                visual_blocks = self.model.visual.base_model.model.blocks
+            except AttributeError:
+                # Fallback if no vision LoRA was applied (plain model)
+                visual_blocks = self.model.visual.blocks
+
+            for block in visual_blocks:
+                old_forward = block.forward
+
+                def make_safe_forward(old_fn):
+                    def safe_forward(*args, **kwargs):
+                        kwargs.pop("attention_mask", None)
+                        return old_fn(*args, **kwargs)
+                    return safe_forward
+
+                block.forward = make_safe_forward(old_forward)
+
+            # ── 4. Input-require-grad hook on the correct patch_embed ──────────
+            # Must go through base_model after PEFT wrapping
+            try:
+                patch_proj = self.model.visual.base_model.model.patch_embed.proj
+            except AttributeError:
+                patch_proj = self.model.visual.patch_embed.proj
+
+            def _make_inputs_require_grad(module, input, output):
+                output.requires_grad = True   # property, not in-place op
+
+            self._vision_grad_hook = patch_proj.register_forward_hook(
+                _make_inputs_require_grad
+            )
+
+        # ── 5. enable_input_require_grads LAST (after grad checkpointing) ──────
+        if hasattr(self.model.language_model, "enable_input_require_grads"):
+            self.model.language_model.enable_input_require_grads()
+
+        # For vision: the patch_embed hook above already handles this,
+        # but also call the method if available for safety
+        if config.train_vision_encoder and hasattr(self.model.visual, "enable_input_require_grads"):
+            self.model.visual.enable_input_require_grads()
 
     @staticmethod
     def _default_lora_targets() -> Sequence[str]:
@@ -775,8 +893,8 @@ class VisionLLMLoRAModel(nn.Module):
 
         with grad_ctx():
 
-            vis_out = self.vision_encoder(
-                pixel_values,
+            vis_out = self.model.visual(
+                hidden_states=pixel_values,
                 grid_thw=grid_thw,
             )
 
@@ -784,7 +902,7 @@ class VisionLLMLoRAModel(nn.Module):
                 vis_out = vis_out.last_hidden_state
 
             if vis_out.shape[-1] != self.embedding.weight.shape[-1]:
-                vis_out = self.vision_encoder.merger(vis_out)
+                vis_out = self.model.visual.merger(vis_out)
 
         vis_out = vis_out.view(
             B,
@@ -879,7 +997,7 @@ class VisionLLMLoRAModel(nn.Module):
 
         planner_queries = (
             self.planner_queries + self.query_pos_embed
-        ).unsqueeze(0).expand(B, -1, -1)
+        ).unsqueeze(0).expand(B, -1, -1).to(dtype)
 
         prompt_embeds = torch.cat(
             [prompt_embeds, planner_queries],
@@ -930,7 +1048,7 @@ class VisionLLMLoRAModel(nn.Module):
             use_cache=False,
         )
 
-        traj_logits, sim = self.traj_classifier(
+        traj_logits, sim, query_variance, relative_variance = self.traj_classifier(
             outputs,
             ego_repr,
         )
@@ -947,4 +1065,6 @@ class VisionLLMLoRAModel(nn.Module):
             "trajectory": trajectory,
             #"attn_weights": attn_weights,
             "similarity": sim,
+            "query_variance": query_variance,
+            "relative_variance": relative_variance,
         }

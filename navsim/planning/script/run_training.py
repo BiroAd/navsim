@@ -100,8 +100,17 @@ def main(cfg: DictConfig) -> None:
     # We do NOT call agent.initialize() here if we resume natively, 
     # since trainer.fit(ckpt_path=...) will load all the weights automatically.
     # If not resuming deeply via trainer (e.g. no ckpt_path), then initialize manually.
-    if not (hasattr(cfg.agent, "checkpoint_path") and cfg.agent.checkpoint_path is not None):
+    is_resuming_same_phase = hasattr(cfg, "ckpt_path") and cfg.ckpt_path is not None
+    
+    if not is_resuming_same_phase:
+        # If we are NOT doing a strict resume, we should initialize the agent.
+        # This allows cross-phase weight loading (e.g., Phase 1 -> Phase 2) 
+        # to proceed smoothly using your custom strict=False logic inside initialize().
+        logger.info("Initializing agent manually (fresh start or cross-phase weight transfer)")
         agent.initialize()
+    else:
+        # Lightning's trainer.fit(ckpt_path=...) will overwrite the model state natively.
+        logger.info(f"Resuming mid-phase run natively from {cfg.ckpt_path}. Skipping agent.initialize()")
 
     logger.info("Building Lightning Module")
     lightning_module = AgentLightningModule(
@@ -194,8 +203,9 @@ def main(cfg: DictConfig) -> None:
     }
     
     # If resuming natively via Pytorch Lightning, pass the checkpoint path
-    if hasattr(cfg.agent, "checkpoint_path") and cfg.agent.checkpoint_path is not None:
-        fit_kwargs["ckpt_path"] = cfg.agent.checkpoint_path
+    if is_resuming_same_phase:
+        logger.info(f"Passing ckpt_path to Lightning trainer: {cfg.ckpt_path}")
+        fit_kwargs["ckpt_path"] = cfg.ckpt_path
         
     trainer.fit(**fit_kwargs)
 

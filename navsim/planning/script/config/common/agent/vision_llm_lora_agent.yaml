@@ -10,5 +10,6 @@ config:
   _target_: navsim.agents.vision_llm_lora.vision_llm_lora_config.VisionLLMLoRAConfig
   _convert_: 'all'
 checkpoint_path: null
-lr_base: 2e-3
-lr_final: 1e-4
+#lr_base: 2e-3
+lr_base: 5e-4
+lr_final: 2.5e-5

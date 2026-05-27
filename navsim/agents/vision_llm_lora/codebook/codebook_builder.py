@@ -2,7 +2,7 @@
 codebook/build_codebook.py
 ──────────────────────────
 Offline pre-processing: subsample the raw navsim trajectory codebook from
-40 timesteps (5 s @ 8 Hz) down to 8 waypoints by taking every 5th frame.
+40 timesteps (4 s @ 10 Hz) down to 8 waypoints by taking every 5th frame.
  
 Usage:
     python codebook/build_codebook.py \

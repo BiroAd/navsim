@@ -117,4 +117,4 @@ def vision_llm_lora_loss(
     #top10 = (pred_topk[:, :10] == target_ids[:, None]).any(dim=-1).float().mean()
 
     #return loss, entropy, predictions["attn_weights"], predictions["similarity"], ade, fde
-    return loss, pred_entropy, predictions["similarity"], ade, fde
+    return loss, pred_entropy, predictions["similarity"], ade, fde, predictions["query_variance"], predictions["relative_variance"]
