@@ -24,6 +24,7 @@ from navsim.agents.vision_llm_lora.vision_llm_lora_loss import (
     vision_llm_lora_loss,
 )
 from navsim.agents.vision_llm_lora.vision_llm_lora_model import VisionLLMLoRAModel
+from navsim.agents.vision_llm_lora.vision_llm_lora_rl import RLReferenceTargetBuilder
 from navsim.common.dataclasses import AgentInput, SensorConfig, Trajectory
 from navsim.planning.training.abstract_feature_target_builder import AbstractFeatureBuilder, AbstractTargetBuilder
 
@@ -205,6 +206,13 @@ class VisionLLMLoRAAgent(AbstractAgent):
             aux = VisionLLMLoRAAuxTargetBuilder(semantic_classes=self._config.bev_semantic_classes)
             aux.cache_root = self._config.aux_target_cache_path  # read by CacheOnlyDataset instead of cache_path
             builders.append(aux)
+        if self._config.rl_loss_weight > 0:
+            if not (self._config.rl_reference_cache_path and self._config.rl_reference_head_path):
+                raise ValueError(
+                    "rl_loss_weight > 0 needs rl_reference_cache_path (scripts/training/cache_rl_reference.py) and "
+                    "rl_reference_head_path (rl_features/<run>/head.pt)"
+                )
+            builders.append(RLReferenceTargetBuilder(self._config.rl_reference_cache_path))
         return builders
 
     def get_feature_builders(self) -> List[AbstractFeatureBuilder]:

@@ -133,6 +133,16 @@ class VisionLLMLoRAConfig:
     # logs the same proxy-score metrics (val/pdm_scores/argmax_score[_gap], expected_score) as the score-head runs and
     # can monitor them. The loss is unchanged (score losses still need pdm_score_loss_weight > 0).
     log_pdm_score_metrics: bool = False
+    # RL with the backbone trainable (RL-3; vision_llm_lora_rl.py, docs/theoretical.md): adds rl_loss_weight x
+    # (-E_pi[r] + rl_beta * KL(pi || pi_start)) over all K entries, rewards = the unfiltered codebook PDM totals. Needs
+    # rl_reference_cache_path (per-scene rewards, start-model fused state and scorer shortlist, written by
+    # scripts/training/cache_rl_reference.py) and rl_reference_head_path (the start policy head: rl_features/<run>/head.pt).
+    # Set the other loss weights to 0 for pure RL. The scorer (sub-score heads) is not trained: evaluation takes its
+    # outputs from the start model (VisionLLMLoRAPrecomputedAgent scores_path). 0 = off.
+    rl_loss_weight: float = 0.0
+    rl_beta: float = 0.02
+    rl_reference_cache_path: Optional[str] = None
+    rl_reference_head_path: Optional[str] = None
 
     # Input resolution fed to the vision encoder: square tiles, the stitched panorama is 6x2 tiles plus a
     # thumbnail. 128 avoids padding every tile to the 32-px merge grid (docs/vision_llm_lora_findings.md F10).

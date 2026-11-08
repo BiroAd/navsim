@@ -154,3 +154,67 @@ def selection_metrics(
         out["kl"] = (p * (log_p - ref_log_p)).sum(-1)
         out["changed"] = (best[:, 0] != ref_log_p.argmax(-1)).float()
     return out
+
+
+# ── RL with the backbone trainable (RL-3; config.rl_loss_weight > 0) ───────────────────────────────────────────────
+# The policy side of the model (LoRA adapters, planner queries, query fusion, policy head; config.training_phase sets
+# which) is trained with expected_reward_kl_loss inside the normal training loop. Per scene it reads, from a separate
+# cache root written by scripts/training/cache_rl_reference.py (<root>/<log>/<token>/vision_llm_rl_reference.gz):
+#   rl_reward (K,) float16: the unfiltered PDM total of every codebook entry (the codebook score table's "score", as in
+#       RL-1; the training cache's pdm_scores have the human-penalty filter applied and are not used)
+#   rl_reference_fused (D,) float16: the start model's fused state (rl_features cache); the reference policy is the
+#       start model's policy head (rl_reference_head_path) on it, so no frozen copy of the backbone is needed
+#   rl_shortlist (S,) int16: the start model's sub-score heads' shortlist, best first; the scorer stays the start model
+#       at evaluation, so shortlist_<k> on it is the selection proxy
+RL_REFERENCE_NAME = "vision_llm_rl_reference"
+_REFERENCE_HEADS: Dict[Tuple[str, str], PolicyHead] = {}
+
+
+class RLReferenceTargetBuilder:
+    """Cache-only target builder of the RL-3 per-scene data (see above); CacheOnlyDataset reads it from cache_root."""
+
+    def __init__(self, cache_root: str):
+        self.cache_root = cache_root
+
+    def get_unique_name(self) -> str:
+        return RL_REFERENCE_NAME
+
+    def compute_targets(self, scene) -> Dict[str, torch.Tensor]:
+        raise NotImplementedError("RL reference targets are written by scripts/training/cache_rl_reference.py")
+
+
+def reference_head(path: str, device: torch.device) -> PolicyHead:
+    """The frozen start policy head from an rl_features head.pt (trajectory_embeddings, policy_state), float32."""
+    key = (str(path), str(device))
+    if key not in _REFERENCE_HEADS:
+        info = torch.load(path, map_location="cpu", weights_only=False)
+        state = info["policy_state"]
+        in_dim = state[POLICY_HEAD_KEYS["scene_proj.weight"]].shape[1]
+        head = PolicyHead(info["trajectory_embeddings"], in_dim=in_dim)
+        head.load_from_checkpoint_state(state)
+        _REFERENCE_HEADS[key] = head.to(device).eval().requires_grad_(False)
+    return _REFERENCE_HEADS[key]
+
+
+def rl_loss_terms(
+    token_logits: torch.Tensor, targets: Dict[str, torch.Tensor], beta: float, reference_head_path: str,
+    shortlist_sizes: Sequence[int] = (64, 256),
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """
+    RL-3 loss: expected_reward_kl_loss of the policy logits (B, K) against the cached rewards, KL to the start policy.
+    Metrics (logged as <train|val>/rl/<name>): expected_reward, kl, argmax, shortlist_<k> (score of the policy's most
+    likely entry among the start model's top-k), argmax_zero, changed (argmax differs from the start policy's), entropy,
+    and shortlist_<k>_gap = 1 - shortlist_<k> (a "min" checkpoint monitor).
+    """
+    rewards = targets["rl_reward"].float()
+    with torch.no_grad():
+        ref_logits = reference_head(reference_head_path, token_logits.device)(targets["rl_reference_fused"].float())
+    loss, stats = expected_reward_kl_loss(token_logits, rewards, ref_logits, beta)
+    with torch.no_grad():
+        metrics = selection_metrics(token_logits.detach(), rewards, targets["rl_shortlist"], shortlist_sizes, ref_logits)
+    extra = {f"rl/{name}": value for name, value in stats.items()}
+    for name in ("argmax", "argmax_zero", "changed", "entropy", *(f"shortlist_{k}" for k in shortlist_sizes)):
+        extra[f"rl/{name}"] = metrics[name].mean()
+    for k in shortlist_sizes:
+        extra[f"rl/shortlist_{k}_gap"] = 1.0 - extra[f"rl/shortlist_{k}"]
+    return loss, extra

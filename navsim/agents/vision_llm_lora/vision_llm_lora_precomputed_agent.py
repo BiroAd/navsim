@@ -4,6 +4,10 @@ predict_vision_llm_lora.py. compute_trajectory looks the scene up by token and a
 VisionLLMLoRAAgent, so one GPU prediction run serves every selection rule (argmax, score_heads, shortlist k, ...).
 It needs no model, no GPU and no camera images; the NAVSIM scoring scripts run unchanged with it.
 
+scores_path (optional): a second prediction folder whose sub-score logits replace those of predictions_path. RL-3
+trains only the policy side; its scorer is the start model, so its selections combine the RL model's policy logits
+(predictions_path) with the start model's pdm_score_logits (scores_path), as the two-adapter model would at inference.
+
 requires_scene is only used to learn the scene's token (scene.scene_metadata.initial_token, the current frame's token,
 which is what the scoring scripts and the prediction run key scenes by); the scene's annotations are not read.
 """
@@ -59,6 +63,7 @@ class VisionLLMLoRAPrecomputedAgent(AbstractAgent):
         trajectory_selection: str = "argmax",
         selection_shortlist_size: int = 64,
         selection_mixture_lambda: float = 10.0,
+        scores_path: Optional[str] = None,
     ):
         super().__init__(trajectory_sampling, requires_scene=True)
         if trajectory_selection not in TRAJECTORY_SELECTIONS:
@@ -67,15 +72,20 @@ class VisionLLMLoRAPrecomputedAgent(AbstractAgent):
         self._selection = trajectory_selection
         self._shortlist_size = selection_shortlist_size
         self._mixture_lambda = selection_mixture_lambda
+        self._scores_path = Path(scores_path) if scores_path else None
         self._predictions: Optional[Dict[str, object]] = None
+        self._scores: Optional[Dict[str, object]] = None
 
     def name(self) -> str:
         return self.__class__.__name__
 
     def initialize(self) -> None:
         self._predictions = load_predictions(self._predictions_path)
-        if self._selection != "argmax" and "pdm_score_logits" not in self._predictions["arrays"]:
-            raise ValueError(f"{self._predictions_path}: no pdm_score_logits, selection {self._selection!r} impossible")
+        if self._scores_path is not None:
+            self._scores = load_predictions(self._scores_path)
+        scores = self._scores or self._predictions
+        if self._selection != "argmax" and "pdm_score_logits" not in scores["arrays"]:
+            raise ValueError(f"{self._scores_path or self._predictions_path}: no pdm_score_logits for {self._selection!r}")
 
     def get_sensor_config(self) -> SensorConfig:
         return SensorConfig.build_no_sensors()
@@ -90,8 +100,13 @@ class VisionLLMLoRAPrecomputedAgent(AbstractAgent):
         token = scene.scene_metadata.initial_token
         if token not in self._predictions["row"]:
             raise KeyError(f"{token}: not in {self._predictions_path}")
+        predictions = row_predictions(self._predictions, token)
+        if self._scores is not None and self._selection != "argmax":
+            if token not in self._scores["row"]:
+                raise KeyError(f"{token}: not in {self._scores_path}")
+            predictions["pdm_score_logits"] = row_predictions(self._scores, token)["pdm_score_logits"]
         trajectory = select_trajectory(
-            row_predictions(self._predictions, token),
+            predictions,
             self._selection,
             self._predictions["codebook"],
             shortlist_size=self._shortlist_size,

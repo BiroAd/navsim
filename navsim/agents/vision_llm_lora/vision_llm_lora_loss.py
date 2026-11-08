@@ -7,6 +7,7 @@ from navsim.agents.vision_llm_lora.vision_llm_lora_aux import aux_losses, aux_ou
 from navsim.agents.vision_llm_lora.vision_llm_lora_codebook import load_codebook
 from navsim.agents.vision_llm_lora.vision_llm_lora_config import VisionLLMLoRAConfig
 from navsim.agents.vision_llm_lora.vision_llm_lora_features import PDM_SCORE_KEYS
+from navsim.agents.vision_llm_lora.vision_llm_lora_rl import rl_loss_terms
 from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorerConfig
 
 # Sub-scores that multiply the total (any 0 zeroes it); the others enter a weighted mean with PDMScorerConfig's weights.
@@ -227,6 +228,13 @@ def vision_llm_lora_loss(
         aux_loss, aux_extra = aux_losses(predictions, targets, config)
         loss = loss + aux_loss
         extra.update(aux_extra)
+
+    # ── Optional RL on the policy logits (RL-3; vision_llm_lora_rl.rl_loss_terms) ──
+    if config.rl_loss_weight > 0:
+        rl_loss, rl_extra = rl_loss_terms(token_logits, targets, config.rl_beta, config.rl_reference_head_path)
+        loss = loss + config.rl_loss_weight * rl_loss
+        extra["loss_terms/rl"] = rl_loss.detach()
+        extra.update(rl_extra)
 
     pred_probs = F.softmax(token_logits.detach().float(), dim=-1)
     pred_entropy = -(pred_probs * torch.log(pred_probs + 1e-7)).sum(dim=-1).mean()

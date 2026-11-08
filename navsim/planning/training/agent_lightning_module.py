@@ -57,7 +57,8 @@ class AgentLightningModule(pl.LightningModule):
             teacher_forcing_ratio = cosine_decay * linear_decay'''
             start = 0.7
             end = 0.1
-            progress = min(self.current_epoch / (self.trainer.max_epochs - 1), 1.0)
+            # max(.., 1): a 1-epoch run (RL-3 smoke test 14928925) divided by zero here; unchanged for >= 2 epochs
+            progress = min(self.current_epoch / max(self.trainer.max_epochs - 1, 1), 1.0)
             teacher_forcing_ratio = start + progress * (end - start)
             teacher_forcing_seq = targets["trajectory"].clone()
 

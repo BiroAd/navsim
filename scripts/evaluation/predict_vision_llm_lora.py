@@ -26,6 +26,7 @@ meta.json, read back with torch.from_numpy(a).view(torch.bfloat16)).
 import argparse
 import json
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -41,7 +42,8 @@ from torch.utils.data import DataLoader, Dataset
 
 import navsim.common.dataloader as dataloader
 from navsim.common.dataloader import MetricCacheLoader, SceneLoader
-from run_pdm_score_balanced import fast_filter_synthetic_scenes  # same directory
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # run_pdm_score_balanced, also when imported by tests
+from run_pdm_score_balanced import fast_filter_synthetic_scenes  # noqa: E402
 
 # navhard's synthetic scenes from a metadata index instead of unpickling all 5,462 scenes (~2 min on one core).
 dataloader.filter_synthetic_scenes = fast_filter_synthetic_scenes

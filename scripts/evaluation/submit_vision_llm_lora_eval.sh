@@ -10,6 +10,8 @@
 # GPU_PARTITION partition of the GPU job (default: the script's gpu,ai), e.g. test
 # PRED        reuse existing predictions under $NAVSIM_EXP_ROOT/predictions/<PRED> instead of running the GPU job
 # AFTER       with PRED: job id the CPU jobs wait for (afterok), e.g. a GPU job still running
+# SCORES_PRED sub-score logits from this prediction folder instead of the model's own (RL-3: the start model,
+#             p3_aux_policy_ep03); passed on to the CPU jobs
 # CPU jobs: 4 CPUs (cpu partition: at most 2000 MB per core, more memory adds idle cores). navtest 8000M / 25 min
 # (18-21 min; 6G peaked at 5.9 GB and job 14927280 was OOM-killed at the end), navhard 6G / 40 min (31 min, 4.7 GB).
 # Run from the repository root with the environment active (sbatch passes it on).

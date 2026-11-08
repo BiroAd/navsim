@@ -13,6 +13,8 @@
 #   run_pdm_score.py (always reactive). Same settings and output layout as run_vision_llm_lora_pdm_score_slurm.sh.
 #   PRED=p3_aux_policy_ep03 SELECTION=shortlist K=256 sbatch scripts/evaluation/run_vision_llm_lora_score_predictions_slurm.sh
 # PRED          prediction folder under $NAVSIM_EXP_ROOT/predictions/ (holds <split>/)
+# SCORES_PRED   optional: prediction folder whose sub-score logits replace PRED's (RL-3: the start model,
+#               e.g. p3_aux_policy_ep03; the RL model's own heads are not trained)
 # SELECTION     argmax | score_heads | score_heads_v1 | shortlist | shortlist_v1 | mixture | mixture_v1
 # K / LAMBDA    shortlist size (default 64) / mixture lambda (default 10)
 # SPLIT         navtest (default) | navhard_two_stage
@@ -56,10 +58,16 @@ case $SELECTION in
 esac
 PRED_DIR=$NAVSIM_EXP_ROOT/predictions/$PRED/$SPLIT
 [[ -f $PRED_DIR/meta.json ]] || { echo "no predictions in $PRED_DIR" >&2; exit 1; }
+SCORES_ARGS=()
+if [[ -n ${SCORES_PRED:-} ]]; then
+    SCORES_DIR=$NAVSIM_EXP_ROOT/predictions/$SCORES_PRED/$SPLIT
+    [[ -f $SCORES_DIR/meta.json ]] || { echo "no predictions in $SCORES_DIR" >&2; exit 1; }
+    SCORES_ARGS=("agent.scores_path='$SCORES_DIR'")
+fi
 SCORE_NAME=${SCORE_NAME:-${PRED}_${LABEL}_${TRAFFIC}_split}
 OUT=pdm_$SPLIT/$SCORE_NAME
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1  # one thread per scoring process
-echo "Predictions $PRED_DIR, selection $LABEL, split $SPLIT, traffic $TRAFFIC, $WORKERS workers -> $OUT"
+echo "Predictions $PRED_DIR${SCORES_PRED:+ (sub-scores from $SCORES_PRED)}, selection $LABEL, split $SPLIT, traffic $TRAFFIC, $WORKERS workers -> $OUT"
 
 # original_sensor_path is never read (the agent asks for no sensors) but the scene loader needs a value.
 python $NAVSIM_DEVKIT_ROOT/scripts/evaluation/run_pdm_score_balanced.py $SCRIPT \
@@ -73,6 +81,7 @@ python $NAVSIM_DEVKIT_ROOT/scripts/evaluation/run_pdm_score_balanced.py $SCRIPT 
     agent.trajectory_selection=$SELECTION \
     agent.selection_shortlist_size=$K \
     agent.selection_mixture_lambda=$LAMBDA \
+    "${SCORES_ARGS[@]}" \
     scorer.config.human_penalty_filter=$HUMAN_FILTER \
     experiment_name=$OUT \
     "$@"

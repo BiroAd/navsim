@@ -11,3 +11,4 @@ predictions_path: ???  # <predictions dir>/<split>
 trajectory_selection: argmax
 selection_shortlist_size: 64
 selection_mixture_lambda: 10.0
+scores_path: null  # optional: take pdm_score_logits from this prediction folder (RL-3: the start model's)
