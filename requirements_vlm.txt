@@ -1,0 +1,17 @@
+# pip constraints for the vision_llm_lora environment on Komondor (A100, Python 3.10, CUDA 12).
+# Used together with requirements.txt by scripts/setup/create_vlm_env.sh. Versions checked on PyPI/GitHub 2026-10-26.
+# flash-attn and causal-conv1d are left out: their prebuilt wheels need glibc 2.32, Komondor (RHEL 8) has 2.28.
+# The full resolved set is written to requirements_vlm_lock.txt after installation.
+torch==2.8.0
+torchvision==0.23.0
+transformers==5.20.2  # Qwen3.5 (qwen3_5) needs >= 5.2.0
+peft==0.21.2
+accelerate==1.15.0
+pytorch-lightning==2.2.1  # repo pin, keeps Lightning's LR-scheduler stepping as in earlier runs
+wandb==0.22.3  # version of the earlier training env; newer wandb needs protobuf >= 5, requirements.txt pins 4.25.3
+omegaconf==2.3.0  # version of the earlier env; 2.4 caps YAML files at 10k nodes and navtrain.yaml has >100k tokens
+# Triton kernels for Qwen3.5's 24 Gated DeltaNet layers. 0.6.0 imports triton.experimental.gluon.language.extra,
+# which only exists from Triton 3.5 (torch 2.8 ships 3.4) although its metadata says triton>=3.3; 0.5.2 has no
+# such import and accepts every argument transformers 5.20.2's qwen3_5 passes to chunk_gated_delta_rule.
+flash-linear-attention==0.5.2
+fla-core==0.5.2

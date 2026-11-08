@@ -10,14 +10,72 @@ from torch.optim.lr_scheduler import LRScheduler
 from navsim.agents.abstract_agent import AbstractAgent
 from navsim.agents.vision_llm_lora.vision_llm_lora_callback import VisionLLMLoRACallback
 from navsim.agents.vision_llm_lora.vision_llm_lora_config import VisionLLMLoRAConfig
+from navsim.agents.vision_llm_lora.vision_llm_lora_aux import aux_output_channels
 from navsim.agents.vision_llm_lora.vision_llm_lora_features import (
+    PDMScoreTargetBuilder,
+    VisionLLMLoRAAuxTargetBuilder,
     VisionLLMLoRAFeatureBuilder,
     VisionLLMLoRATargetBuilder,
 )
-from navsim.agents.vision_llm_lora.vision_llm_lora_loss import vision_llm_lora_loss
+from navsim.agents.vision_llm_lora.vision_llm_lora_loss import (
+    V1_MULTIPLICATIVE_PDM_SCORE_KEYS,
+    V1_WEIGHTED_PDM_SCORE_WEIGHTS,
+    aggregate_pdm_scores,
+    vision_llm_lora_loss,
+)
 from navsim.agents.vision_llm_lora.vision_llm_lora_model import VisionLLMLoRAModel
 from navsim.common.dataclasses import AgentInput, SensorConfig, Trajectory
 from navsim.planning.training.abstract_feature_target_builder import AbstractFeatureBuilder, AbstractTargetBuilder
+
+
+TRAJECTORY_SELECTIONS = (
+    "argmax",
+    "score_heads",
+    "score_heads_v1",
+    "shortlist",
+    "shortlist_v1",
+    "mixture",
+    "mixture_v1",
+)
+
+
+def select_trajectory(
+    predictions: Dict[str, torch.Tensor],
+    selection: str,
+    codebook: torch.Tensor,
+    shortlist_size: int = 64,
+    mixture_lambda: float = 10.0,
+) -> torch.Tensor:
+    """
+    Output trajectory per config.trajectory_selection.
+    :param predictions: model outputs; "trajectory" (B, 8, 3), and for the head-based selections "pdm_score_logits"
+        (B, M, K) and, for "shortlist*" / "mixture*", the policy's "trajectory_logits" (B, K)
+    :param selection: "argmax" (the model's own output); "score_heads" (entry with the best predicted total, v2 formula
+        without two-frame comfort); "shortlist" (the policy's most likely entry among the shortlist_size entries with
+        the best predicted total); "mixture" (argmax of log p + mixture_lambda * log predicted total); the "_v1" variants
+        use the NAVSIM v1 PDMS formula for the predicted total
+    :param codebook: (K, 8, 3) codebook trajectories
+    :return: (B, 8, 3)
+    """
+    if selection not in TRAJECTORY_SELECTIONS:
+        raise ValueError(f"trajectory_selection must be one of {TRAJECTORY_SELECTIONS}, got {selection!r}")
+    if selection == "argmax":
+        return predictions["trajectory"]
+    sub_scores = predictions["pdm_score_logits"].float().sigmoid()
+    if selection.endswith("_v1"):
+        total = aggregate_pdm_scores(sub_scores, V1_MULTIPLICATIVE_PDM_SCORE_KEYS, V1_WEIGHTED_PDM_SCORE_WEIGHTS)
+    else:
+        # Same aggregation as head_all in scripts/evaluation/eval_vision_llm_lora_checkpoints.py.
+        total = aggregate_pdm_scores(sub_scores)  # (B, K)
+    if selection.startswith("score_heads"):
+        return codebook[total.argmax(dim=-1)]
+    log_p = predictions["trajectory_logits"].float().log_softmax(dim=-1)  # (B, K)
+    if selection.startswith("shortlist"):
+        short = total.topk(min(shortlist_size, total.shape[-1]), dim=-1).indices  # (B, k)
+        best = short.gather(1, log_p.gather(1, short).argmax(dim=-1, keepdim=True))[:, 0]
+    else:  # mixture
+        best = (log_p + mixture_lambda * total.clamp_min(1e-6).log()).argmax(dim=-1)
+    return codebook[best]
 
 
 class VisionLLMLoRAAgent(AbstractAgent):
@@ -36,6 +94,15 @@ class VisionLLMLoRAAgent(AbstractAgent):
         self._lr_base = lr_base
         self._lr_final = lr_final
         self._checkpoint_path = checkpoint_path
+        if config.trajectory_selection not in TRAJECTORY_SELECTIONS:
+            raise ValueError(
+                f"trajectory_selection must be one of {TRAJECTORY_SELECTIONS}, got {config.trajectory_selection!r}"
+            )
+        if config.trajectory_selection != "argmax" and config.pdm_score_loss_weight <= 0:
+            raise ValueError(
+                f"trajectory_selection={config.trajectory_selection!r} needs the sub-score heads "
+                "(pdm_score_loss_weight > 0)"
+            )
         self._vlm_model = VisionLLMLoRAModel(self._trajectory_sampling, config)
 
     def name(self) -> str:
@@ -79,8 +146,10 @@ class VisionLLMLoRAAgent(AbstractAgent):
             "_vlm_model.velocity_encoder.",
             "_vlm_model.acceleration_encoder.",
             "_vlm_model.direction_embedding.",
+            "_vlm_model.ego_state_tokens.",
             "_vlm_model.planner_queries",
             "_vlm_model.query_pos_embed",
+            "_vlm_model.aux_decoder.",
         )
 
         # Filter out random optimizer states or discarded pre-training heads
@@ -100,25 +169,43 @@ class VisionLLMLoRAAgent(AbstractAgent):
         if unexpected_keys:
             print(f"Unexpected keys ({len(unexpected_keys)}):", unexpected_keys)
 
-        # Ensure the model is moved to GPU for inference since we don't use PL Trainer here
-        self.cuda()
+        # No device move here: training also calls initialize() for the phase handoff, before Lightning sets each
+        # rank's GPU, so .cuda() would put every rank's copy on cuda:0. compute_trajectory moves the model for eval.
 
     def get_sensor_config(self) -> SensorConfig:
         history_steps = [3]
+        # The panorama layout uses the side cameras L1/R1 instead of the rear-side L2/R2.
+        panorama = self._config.camera_layout == "panorama"
         return SensorConfig(
             cam_f0=history_steps,
             cam_l0=history_steps,
-            cam_l1=False,
-            cam_l2=history_steps,
+            cam_l1=history_steps if panorama else False,
+            cam_l2=False if panorama else history_steps,
             cam_r0=history_steps,
-            cam_r1=False,
-            cam_r2=history_steps,
+            cam_r1=history_steps if panorama else False,
+            cam_r2=False if panorama else history_steps,
             cam_b0=history_steps,
             lidar_pc=False,
         )
 
     def get_target_builders(self) -> List[AbstractTargetBuilder]:
-        return [VisionLLMLoRATargetBuilder(trajectory_sampling=self._trajectory_sampling, config=self._config)]
+        builders = [VisionLLMLoRATargetBuilder(trajectory_sampling=self._trajectory_sampling, config=self._config)]
+        if (
+            self._config.pdm_score_loss_weight > 0
+            or self._config.score_weighted_labels
+            or self._config.log_pdm_score_metrics
+        ):
+            builders.append(PDMScoreTargetBuilder())  # precomputed, read from the training cache
+        if aux_output_channels(self._config):
+            if not self._config.aux_target_cache_path:
+                raise ValueError(
+                    "aux_*_loss_weight > 0 needs aux_target_cache_path (the mounted aux_targets_navtrain.sqfs; "
+                    "AUX_TARGETS=1 in run_vision_llm_lora_agent_training_slurm.sh)"
+                )
+            aux = VisionLLMLoRAAuxTargetBuilder(semantic_classes=self._config.bev_semantic_classes)
+            aux.cache_root = self._config.aux_target_cache_path  # read by CacheOnlyDataset instead of cache_path
+            builders.append(aux)
+        return builders
 
     def get_feature_builders(self) -> List[AbstractFeatureBuilder]:
         return [VisionLLMLoRAFeatureBuilder(config=self._config)]
@@ -150,8 +237,10 @@ class VisionLLMLoRAAgent(AbstractAgent):
 
         traj_named   = []
         ego_named    = []
+        ego_gain_named = []
         lang_named   = []
         vision_named = []
+        aux_named    = []
         other_named  = []
 
 
@@ -166,11 +255,18 @@ class VisionLLMLoRAAgent(AbstractAgent):
             ):
                 traj_named.append((name, param))
 
+            elif "ego_state_tokens.norm" in name:
+                ego_gain_named.append((name, param))
+
+            elif "aux_decoder" in name:
+                aux_named.append((name, param))
+
             elif (
                 "velocity_encoder" in name
                 or "acceleration_encoder" in name
                 or "direction_embedding" in name
                 or "ego_fusion_mlp" in name
+                or "ego_state_tokens" in name
             ):
                 ego_named.append((name, param))
 
@@ -198,8 +294,13 @@ class VisionLLMLoRAAgent(AbstractAgent):
         # Stage 2 (LoRA fine-tune): lr_base should be ~5e-4
         #   traj and ego already warm → reduced multiplier
         #   lang/vision pretrained → conservative multiplier
-        traj_lr = self._config.traj_lr_multiplier * self._lr_base   # stage1: 1.0, stage2: 0.4
-        ego_lr = self._config.ego_lr_multiplier * self._lr_base   # stage1: 1.0, stage2: 0.5
+        traj_multiplier = self._config.traj_lr_multiplier
+        ego_multiplier = self._config.ego_lr_multiplier
+        if self._config.training_phase == 1 and self._config.phase1_lr_multiplier is not None:
+            traj_multiplier = ego_multiplier = self._config.phase1_lr_multiplier
+        traj_lr = traj_multiplier * self._lr_base
+        ego_lr = ego_multiplier * self._lr_base
+        ego_gain_lr = self._config.ego_lr_multiplier * self._lr_base
         lang_lr = self._config.lang_lr_multiplier * self._lr_base   # stage1: 0.0 (empty), stage2: 0.1
         vision_lr = self._config.vision_lr_multiplier * self._lr_base   # stage1: 0.0 (empty), stage2: 0.05
 
@@ -219,10 +320,12 @@ class VisionLLMLoRAAgent(AbstractAgent):
                     "weight_decay": 0.0,
                 })
         
-        _add_group(traj_decay, traj_no_decay, traj_lr, 0.01)
+        _add_group(traj_decay, traj_no_decay, traj_lr, self._config.traj_weight_decay)
         _add_group(ego_decay, ego_no_decay, ego_lr, 0.01)
+        _add_group(*self.split_decay_params(ego_gain_named), ego_gain_lr, 0.01)
         _add_group(lang_decay, lang_no_decay, lang_lr, 0.01)
         _add_group(vision_decay, vision_no_decay, vision_lr, 0.01)
+        _add_group(*self.split_decay_params(aux_named), self._config.aux_lr_multiplier * self._lr_base, 0.01)
         _add_group(other_decay, other_no_decay, lang_lr, 0.0)
 
 
@@ -316,6 +419,9 @@ class VisionLLMLoRAAgent(AbstractAgent):
 
     def compute_trajectory(self, agent_input: AgentInput) -> Trajectory:
         self.eval()
+        # Evaluation runs without the Lightning trainer; move the weights once, on the first scene.
+        if next(self.parameters()).device.type != self.device.type:
+            self.to(self.device)
         features: Dict[str, torch.Tensor] = {}
 
         for builder in self.get_feature_builders():
@@ -323,8 +429,19 @@ class VisionLLMLoRAAgent(AbstractAgent):
 
         features = {k: (v.unsqueeze(0).to(self.device) if isinstance(v, torch.Tensor) else v) for k, v in features.items()}
 
-        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.float16):
+        # Autocast in the weights' dtype (config.torch_dtype), as in training; fp16 autocast over bf16 weights can
+        # overflow. float32 weights run without autocast.
+        dtype = getattr(torch, self._config.torch_dtype)
+        autocast_enabled = dtype in (torch.float16, torch.bfloat16)
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=dtype, enabled=autocast_enabled):
             predictions = self.forward(features, teacher_forcing_seq=None, teacher_forcing_ratio=1.0)
-            poses = predictions["trajectory"].squeeze(0).cpu().numpy()
+            trajectory = select_trajectory(
+                predictions,
+                self._config.trajectory_selection,
+                self._vlm_model.codebook,
+                shortlist_size=self._config.selection_shortlist_size,
+                mixture_lambda=self._config.selection_mixture_lambda,
+            )
+            poses = trajectory.squeeze(0).float().cpu().numpy()
 
         return Trajectory(poses, self._trajectory_sampling)

@@ -171,17 +171,18 @@ def main(cfg: DictConfig) -> None:
         every_n_epochs=1,
     )
 
+    # The template used {val_loss}, which is not a logged key (the metric is val/loss), so names showed 0.00.
     best_model_checkpoint = ModelCheckpoint(
         dirpath=f"{cfg.checkpoint.dirpath}/best",
-        filename="best-{epoch:02d}-{val_loss:.2f}",
+        filename="best-{epoch:02d}",
         save_top_k=1,
-        monitor="val/loss",
+        monitor=cfg.checkpoint_monitor,
         mode="min",
     )
 
     early_stopping = EarlyStopping(
-        monitor="val/loss",
-        patience=3,  # Number of epochs with no improvement after which training will stop
+        monitor=cfg.checkpoint_monitor,
+        patience=cfg.early_stopping_patience,  # Number of epochs with no improvement after which training will stop
         verbose=True,
         mode="min"
     )

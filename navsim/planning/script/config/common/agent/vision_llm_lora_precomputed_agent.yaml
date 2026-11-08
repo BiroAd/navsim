@@ -1,0 +1,13 @@
+# Replays saved vision_llm_lora outputs (scripts/evaluation/predict_vision_llm_lora.py) with a selection rule; CPU only.
+_target_: navsim.agents.vision_llm_lora.vision_llm_lora_precomputed_agent.VisionLLMLoRAPrecomputedAgent
+_convert_: 'all'
+
+trajectory_sampling:
+    _target_: nuplan.planning.simulation.trajectory.trajectory_sampling.TrajectorySampling
+    _convert_: 'all'
+    time_horizon: 4
+    interval_length: 0.5
+predictions_path: ???  # <predictions dir>/<split>
+trajectory_selection: argmax
+selection_shortlist_size: 64
+selection_mixture_lambda: 10.0

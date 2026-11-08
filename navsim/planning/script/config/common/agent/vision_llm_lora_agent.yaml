@@ -9,6 +9,43 @@ trajectory_sampling:
 config:
   _target_: navsim.agents.vision_llm_lora.vision_llm_lora_config.VisionLLMLoRAConfig
   _convert_: 'all'
+  codebook_path: ${oc.env:NAVSIM_DEVKIT_ROOT}/navsim/agents/vision_llm_lora/codebook/16384_8step.npy
+  # Preprocessing fixes from docs/vision_llm_lora_findings.md (F9-F11, F13); they change the cached features.
+  # Checkpoints trained before 2026-10-26 need the original values: camera_layout=original thumbnail=canvas
+  # camera_width=112 camera_height=112 swap_red_blue=true image_normalization=imagenet patch_order=raster
+  # torch_dtype=float16 image_tokens=custom image_layout=tiles, and llm_lora_target_modules without
+  # in_proj_qkv/in_proj_z/out_proj.
+  camera_layout: panorama
+  thumbnail: front_zoom
+  camera_width: 128
+  camera_height: 128
+  swap_red_blue: false
+  image_normalization: qwen
+  patch_order: merge_window
+  # Tiles reassembled into the front and rear canvas rows, one image each (+ the front zoom); "tiles" = 13 images.
+  image_layout: strips
+  # Qwen3.5's native prompt format (findings F14-F16): pretrained vision tokens, one block per image, no space tokens,
+  # multimodal RoPE positions for the image tokens, empty think block before the planner queries. Model-side only.
+  image_tokens: qwen
+  # Also adapt the 24 Gated DeltaNet layers' token mixing (findings F18). Missing LoRA keys in an older checkpoint
+  # load as a zero update (lora_B = 0) through agent.checkpoint_path; a native +ckpt_path resume fails on them.
+  llm_lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj, in_proj_qkv, in_proj_z, out_proj]
+  # Ego state inside the LLM only (findings F3): command as text, velocity/acceleration as one soft token each, and
+  # no late-fusion encoders, so the head sees only the planner queries. Changes the modules and the head's input
+  # size, so start from phase 1; older checkpoints need command_in_prompt=false ego_state_tokens=false
+  # late_ego_fusion=true.
+  late_ego_fusion: false
+  command_in_prompt: true
+  ego_state_tokens: true
+  # bf16 weights (Qwen3.5's native dtype); train with trainer.params.precision=bf16-mixed to match.
+  # sdpa: PyTorch's built-in attention, which uses its own FlashAttention-2 kernel on A100 in bf16. The flash-attn
+  # package's prebuilt wheels need glibc 2.32 and Komondor (RHEL 8) has 2.28.
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  # Phase 1 trains only new modules: trajectory head, planner queries and ego encoders/tokens at the full lr_base
+  # (5e-4) instead of 0.10 / 0.12 x lr_base; the ego-token norm gain keeps 0.12. Phases 2-3 are unchanged.
+  # Phase 1 runs before 2026-10-28 used phase1_lr_multiplier=null.
+  phase1_lr_multiplier: 1.0
 checkpoint_path: null
 #lr_base: 2e-3
 lr_base: 5e-4

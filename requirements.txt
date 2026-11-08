@@ -50,3 +50,4 @@ timm
 accelerate
 peft
 bitsandbytes
+wandb  # Used by the vision_llm callbacks and run_training.py

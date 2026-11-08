@@ -109,7 +109,6 @@ class VisionLLMFeatureBuilder(AbstractFeatureBuilder):
         #pixel_values = transform(images)'''
         pixel_values = [transform(image) for image in images]
         pixel_values = torch.stack(pixel_values)
-        print(f"Pixel values shape: {pixel_values.shape}")
 
         return pixel_values
         #print(f"Stitched image shape: {stitched_image.shape}")

@@ -19,6 +19,7 @@ from navsim.planning.metric_caching.metric_cache import MetricCache
 from navsim.planning.simulation.planner.pdm_planner.scoring.pdm_scorer import PDMScorer
 from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
 from navsim.planning.simulation.planner.pdm_planner.utils.pdm_array_representation import ego_states_to_state_array
+from navsim.planning.simulation.planner.pdm_planner.utils.pdm_enums import WeightedMetricIndex
 from navsim.traffic_agents_policies.abstract_traffic_agents_policy import AbstractTrafficAgentsPolicy
 
 
@@ -190,14 +191,30 @@ def pdm_score_from_interpolated_trajectory(
             human_simulated_agent_detections_tracks,
         )[0]
 
+        # Upstream fix "Fix human filter bug (Issue #151)" (autonomousvision/navsim commit 359c7f72, 2025-09-30), ported
+        # 2026-11-05: the filtered sub-scores now also enter the score, by recomputing multiplicative_metrics_prod and
+        # weighted_metrics from them (the final score is built from these two in compute_final_scores). Before the
+        # fix only the reported columns changed (EPDMS*). pdm_score is no longer overwritten (as upstream).
+        skip_columns = {"multiplicative_metrics_prod", "weighted_metrics", "weighted_metrics_array", "pdm_score"}
+
+        modified_any = False
         for column in human_pdm_result.columns:
-            if column in [
-                "multiplicative_metrics_prod",
-                "weighted_metrics",
-                "weighted_metrics_array",
-            ]:
-                continue
-            if human_pdm_result[column].iloc[0] == 0:
+            if column not in skip_columns and human_pdm_result[column].iloc[0] == 0:
                 pdm_result.at[0, column] = 1
+                modified_any = True
+
+        if modified_any:
+            pdm_result.at[0, "multiplicative_metrics_prod"] = (
+                pdm_result.at[0, "no_at_fault_collisions"]
+                * pdm_result.at[0, "drivable_area_compliance"]
+                * pdm_result.at[0, "driving_direction_compliance"]
+                * pdm_result.at[0, "traffic_light_compliance"]
+            )
+            weighted_metrics = pdm_result.at[0, "weighted_metrics"].copy()
+            weighted_metrics[WeightedMetricIndex.PROGRESS] = pdm_result.at[0, "ego_progress"]
+            weighted_metrics[WeightedMetricIndex.TTC] = pdm_result.at[0, "time_to_collision_within_bound"]
+            weighted_metrics[WeightedMetricIndex.LANE_KEEPING] = pdm_result.at[0, "lane_keeping"]
+            weighted_metrics[WeightedMetricIndex.HISTORY_COMFORT] = pdm_result.at[0, "history_comfort"]
+            pdm_result.at[0, "weighted_metrics"] = weighted_metrics
 
     return pdm_result, simulated_states[pred_idx]

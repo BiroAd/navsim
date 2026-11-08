@@ -28,6 +28,16 @@ def dump_feature_target_to_pickle(path: Path, data_dict: Dict[str, torch.Tensor]
         pickle.dump(data_dict, f)
 
 
+def _builder_cache_file(builder, cache_path: Path, token_path: Path) -> Path:
+    """
+    Cache file of one builder for one scene: <token_path>/<name>.gz, or <builder.cache_root>/<log>/<token>/<name>.gz when
+    the builder sets a cache_root (targets cached into a separate tree, e.g. a mounted squashfs image).
+    """
+    root = getattr(builder, "cache_root", None)
+    folder = Path(root) / token_path.relative_to(cache_path) if root else token_path
+    return folder / (builder.get_unique_name() + ".gz")
+
+
 class CacheOnlyDataset(torch.utils.data.Dataset):
     """Dataset wrapper for feature/target datasets from cache only."""
 
@@ -101,7 +111,7 @@ class CacheOnlyDataset(torch.utils.data.Dataset):
             for token_path in log_path.iterdir():
                 found_caches: List[bool] = []
                 for builder in feature_builders + target_builders:
-                    data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+                    data_dict_path = _builder_cache_file(builder, cache_path, token_path)
                     found_caches.append(data_dict_path.is_file())
                 if all(found_caches):
                     valid_cache_paths[token_path.name] = token_path
@@ -119,13 +129,13 @@ class CacheOnlyDataset(torch.utils.data.Dataset):
 
         features: Dict[str, torch.Tensor] = {}
         for builder in self._feature_builders:
-            data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+            data_dict_path = _builder_cache_file(builder, self._cache_path, token_path)
             data_dict = load_feature_target_from_pickle(data_dict_path)
             features.update(data_dict)
 
         targets: Dict[str, torch.Tensor] = {}
         for builder in self._target_builders:
-            data_dict_path = token_path / (builder.get_unique_name() + ".gz")
+            data_dict_path = _builder_cache_file(builder, self._cache_path, token_path)
             data_dict = load_feature_target_from_pickle(data_dict_path)
             targets.update(data_dict)
 

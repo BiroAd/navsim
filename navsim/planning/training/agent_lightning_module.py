@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import pytorch_lightning as pl
 from torch import Tensor
@@ -32,6 +32,7 @@ class AgentLightningModule(pl.LightningModule):
         self.training_fde = []
         self.training_query_variance = []
         self.training_relative_variance = []
+        self.training_extra: Dict[str, List[Tensor]] = {}  # extra loss metrics, same window as the lists above
         #self.train_loss_mean = torchmetrics.MeanMetric()
 
     def _step(self, batch: Tuple[Dict[str, Tensor], Dict[str, Tensor]], logging_prefix: str) -> Tensor:
@@ -62,7 +63,8 @@ class AgentLightningModule(pl.LightningModule):
 
         prediction = self.agent.forward(features, teacher_forcing_seq, teacher_forcing_ratio=teacher_forcing_ratio)
         #loss, separate_losses = self.agent.compute_loss(features, targets, prediction)
-        loss, entropy, similarity, ade_loss, fde_loss, query_variance, relative_variance = self.agent.compute_loss(features, targets, prediction)
+        # An optional 8th value is a dict of extra scalar metrics (e.g. separate loss terms), logged below.
+        loss, entropy, similarity, ade_loss, fde_loss, query_variance, relative_variance, *extra = self.agent.compute_loss(features, targets, prediction)
         if logging_prefix == "train":
             self.training_step_outputs.append(loss.detach().cpu())
             self.training_entropy.append(entropy.detach().cpu())
@@ -147,6 +149,18 @@ class AgentLightningModule(pl.LightningModule):
         self.log(f"stabilize/{logging_prefix}/similarity", similarity, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log(f"stabilize/{logging_prefix}/query_variance", query_variance, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         self.log(f"stabilize/{logging_prefix}/relative_variance", relative_variance, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        for name, value in (extra[0] if extra else {}).items():
+            self.log(f"{logging_prefix}/{name}", value, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+            if logging_prefix == "train":  # windowed mean over the logging interval, as the *_mean metrics above
+                self.training_extra.setdefault(name, []).append(value.detach().float().cpu())
+                self.log(
+                    f"train/{name}_mean",
+                    torch.stack(self.training_extra[name]).mean(),
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=False,
+                    sync_dist=False,
+                )
         #self.log(f"stabilize/{logging_prefix}/attn_weights", attn_weights, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)  
         #pos_loss = separate_losses["pos_loss"]
         #theta_loss = separate_losses["theta_loss"]
@@ -156,7 +170,9 @@ class AgentLightningModule(pl.LightningModule):
         #self.log(f"{logging_prefix}/lr", self.trainer.optimizers[0].param_groups[0]["lr"], on_step=True, on_epoch=True, prog_bar=True)
 
 
-        if len(self.training_step_outputs) == 800:
+        # One running-mean window = one logging interval: log_every_n_steps optimizer steps of accumulate_grad_batches
+        # batches each.
+        if len(self.training_step_outputs) >= self.trainer.log_every_n_steps * self.trainer.accumulate_grad_batches:
             self.training_step_outputs = []
             self.training_entropy = []
             #self.training_attn_weights = []
@@ -165,6 +181,7 @@ class AgentLightningModule(pl.LightningModule):
             self.training_fde = []
             self.training_query_variance = []
             self.training_relative_variance = []
+            self.training_extra = {}
 
         return loss
     
@@ -235,6 +252,33 @@ class AgentLightningModule(pl.LightningModule):
 
         return total_norm ** 0.5
 
+    def _frozen_parameter_names(self) -> List[str]:
+        # remove_duplicate=False: a frozen tensor registered under two names (vision_llm_lora's `embedding` alias of the
+        # LLM input embedding) must be left out under both.
+        return [name for name, p in self.named_parameters(remove_duplicate=False) if not p.requires_grad]
+
+    def on_save_checkpoint(self, checkpoint: Dict) -> None:
+        """
+        Leave frozen parameters out of the checkpoint: they come back from the pretrained weights whenever the agent is
+        built (for vision_llm_lora the Qwen backbone, ~96% of a 9 GB checkpoint). Agents that train every parameter
+        are unaffected. agent.initialize() and the phase handoff read only trained keys, so they work unchanged.
+        """
+        frozen = set(self._frozen_parameter_names())
+        if frozen:
+            checkpoint["state_dict"] = {k: v for k, v in checkpoint["state_dict"].items() if k not in frozen}
+            checkpoint["frozen_parameters_omitted"] = True
+
+    def on_load_checkpoint(self, checkpoint: Dict) -> None:
+        """
+        Refill parameters left out by on_save_checkpoint from the freshly built model, so the strict load of a native
+        resume (+ckpt_path=) works. Lightning calls this hook before loading the state dict
+        (pytorch_lightning 2.2.1, trainer/connectors/checkpoint_connector.py, restore_model).
+        """
+        if checkpoint.get("frozen_parameters_omitted"):
+            state = self.state_dict()
+            for name in self._frozen_parameter_names():
+                checkpoint["state_dict"].setdefault(name, state[name])
+
     def on_before_optimizer_step(self, optimizer):
         """
         Logs true, unscaled gradient norms before the optimizer updates weights.
@@ -249,8 +293,14 @@ class AgentLightningModule(pl.LightningModule):
         # --------------------------------------------------
         # Main trainable modules & LoRA gradients
         # --------------------------------------------------
+        # The ego_mlp metrics follow the module that encodes velocity and acceleration: ego_fusion_mlp (late fusion)
+        # if present, else ego_state_tokens (late_ego_fusion=False). When both exist, ego_state_tokens is logged apart.
+        ego_fusion_mlp = getattr(model, "ego_fusion_mlp", None)
+        ego_state_tokens = getattr(model, "ego_state_tokens", None)
+        ego_module = ego_fusion_mlp if ego_fusion_mlp is not None else ego_state_tokens
+
         traj_head_grad = self._grad_norm(model.traj_classifier)
-        ego_mlp_grad = self._grad_norm(model.ego_fusion_mlp)
+        ego_mlp_grad = self._grad_norm(ego_module) if ego_module is not None else math.nan
         language_lora_grad = self._grad_norm_by_name(model, "language_model")
         vision_lora_grad = self._grad_norm_by_name(model, "visual")
 
@@ -273,7 +323,7 @@ class AgentLightningModule(pl.LightningModule):
         # Parameter norms & Ratios
         # --------------------------------------------------
         traj_head_param = self._param_norm(model.traj_classifier)
-        ego_mlp_param = self._param_norm(model.ego_fusion_mlp)
+        ego_mlp_param = self._param_norm(ego_module) if ego_module is not None else 0.0
 
         # Protect the ratio calculation
         traj_ratio = 0.0
@@ -294,9 +344,16 @@ class AgentLightningModule(pl.LightningModule):
 
         self.log("grad_ratio/traj_head", traj_ratio, on_step=True, on_epoch=False, prog_bar=False, sync_dist=False)
         self.log("grad_ratio/ego_mlp", ego_ratio, on_step=True, on_epoch=False, prog_bar=False, sync_dist=False)
+        if ego_state_tokens is not None and ego_module is not ego_state_tokens:
+            self.log("grad/ego_state_tokens", self._grad_norm(ego_state_tokens), on_step=True, on_epoch=False, prog_bar=False, sync_dist=False)
+        if ego_state_tokens is not None:
+            # Mean |gain| of the ego-token RMSNorm = the scale the ego tokens enter the LLM at (starts at the token
+            # embedding RMS, ~0.013 for Qwen3.5-4B).
+            ego_token_gain = ego_state_tokens.norm.weight.detach().abs().mean()
+            self.log("param/ego_token_gain", ego_token_gain, on_step=True, on_epoch=False, prog_bar=False, sync_dist=False)
 
         # Clear lists to prevent memory leaks over long epochs
-        if len(self.training_grad_traj) >= 800:
+        if len(self.training_grad_traj) >= self.trainer.log_every_n_steps:  # appended once per optimizer step
             self.training_grad_vision = []
             self.training_grad_lang = []
             self.training_grad_traj = []

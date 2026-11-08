@@ -19,6 +19,8 @@ cache_path: ${oc.env:NAVSIM_EXP_ROOT}/training_cache
 use_cache_without_dataset: true # load the training samples from the cache. scene-filter will be ignored
 force_cache_computation: false # force the cache computation even if the cache already exists
 seed: 0
+early_stopping_patience: 3 # epochs without improvement of checkpoint_monitor before training stops
+checkpoint_monitor: val/loss # metric (lower is better) for the best checkpoint and early stopping
 
 dataloader:
   params:

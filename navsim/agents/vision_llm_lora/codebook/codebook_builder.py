@@ -10,7 +10,7 @@ Usage:
         --output codebook/16384_8step.npy
  
 Input shape  : (K, 40, 3)  — K trajectory templates, 40 (x, y, yaw) steps
-Output shape : (K,  8, 3)  — same templates at indices [0, 5, 10, …, 35]
+Output shape : (K,  8, 3)  — same templates at indices [4, 9, 14, …, 39] (pose i is at (i + 1) * 0.1 s)
 """
  
 import argparse
