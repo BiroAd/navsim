@@ -1023,7 +1023,14 @@ fixed (it now takes the folder holding the checkpoint), the 40 stuck jobs cancel
 Validation (navtrain val, final step 1329), seed 0 → seed 1: rl3_b0.005 argmax 0.8548 → 0.8560, `shortlist_256` 0.8506
 → 0.8490, KL 3.06 → 2.84; rl3_ecshort4 `argmax_no_ec` 0.8454 → 0.8454, `ec_argmax` 0.725 → 0.725, `shortlist_256`
 0.8108 → 0.8103, KL 3.48 → 3.53. On val the seed moves the final metrics by ≤ 0.002 (mid-training up to 0.016: rl3
-argmax at step 664 0.8440 vs 0.8285). Official results: PENDING.
+argmax at step 664 0.8440 vs 0.8285).
+**Official results (final_evaluation.md "Seed replicates", findings 42-45):** navtest reproduces within the paired SE
+(rl3_b0.005 seed 1: argmax + EC rule 0.9026 vs 0.9027, mixture + EC rule 0.9085 vs 0.9079; ecshort w 4 below the
+reference with every EC rule in both seeds). navhard does not: shortlist + EC rule n 64 rl3_b0.005 0.441 → 0.454,
+ecshort w 4 0.456 → 0.444, so the same recipe moves ±0.012-0.013 between seeds and the ecshort gain (finding 40)
+reverses (two-seed mean +0.002 ± 0.010). Conclusion: EC in the reward (either previous plan) gives no measurable
+navhard gain and costs navtest when the EC rule is used; the thesis bests are rule results on rl3_b0.005 (navtest
+0.908, navhard 0.449 ± ~0.01 over four runs).
 
 **Previous plan from the shortlist (submitted 2026-11-14).** At a shortlist evaluation the plan output at t − 0.5 s is
 the policy's best entry inside the scorer's top 256, not its argmax; on rl3_b0.005's saved predictions (control scorer,

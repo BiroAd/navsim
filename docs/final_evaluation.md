@@ -8,8 +8,8 @@ their settings are in [experiments.md](experiments.md). Last updated 2026-11-14.
 
 | Benchmark | Without EC-aware selection | With EC-aware selection (section "EC-aware selection") |
 |---|---|---|
-| navhard (leaderboard metric) | 0.419 (shortlist k 256, control scorer; leaderboard **41.94**); 0.425 with RL-3 + EC reward w 4, shortlist previous plan | 0.441 (same + EC, top 64; stage one 0.795 / two 0.549; not yet submitted); **0.456** with RL-3 + EC reward w 4, shortlist previous plan (stage one 0.792 / two 0.570; finding 40: +0.015 ± 0.013 over 0.441, one seed; pickle ready) |
-| navtest v2 EPDMS | 0.8983 (RL-3 + EC reward w 2, control scorer, mixture λ 10; 0.8965 without the EC reward) | **0.9079** (mixture λ 10 + EC, top 64, sequential; EC 0.917; finding 39) |
+| navhard (leaderboard metric) | 0.419 (shortlist k 256, control scorer; leaderboard **41.94**); 0.425 with RL-3 + EC reward w 4, shortlist previous plan | 0.441 (same + EC, top 64; stage one 0.795 / two 0.549; not yet submitted); **0.456** with RL-3 + EC reward w 4, shortlist previous plan (stage one 0.792 / two 0.570; pickle ready); seed replicates: rl3_b0.005 0.454, ecshort w 4 0.444, so the level is 0.449 ± ~0.01 and the EC-reward gain did not replicate (finding 42) |
+| navtest v2 EPDMS | 0.8983 (RL-3 + EC reward w 2, control scorer, mixture λ 10; 0.8965 without the EC reward) | **0.9079** (mixture λ 10 + EC, top 64, sequential; EC 0.917; finding 39); seed 1: 0.9085 (finding 43) |
 | navtest v1 PDMS | 0.9180 (mixture_v1 λ 10, pairwise scorer) | – (EC is not in v1; the rule costs v1 −0.0004 to −0.002) |
 
 The EC-aware rule needs the plan of the previous frame. The numbers here take it from the saved prediction of the
@@ -640,13 +640,70 @@ scenes count, and the combined score rests on ~450 groups.
     driving. Whether the training taught the model to aim for better positions or this is chance is UNKNOWN.
     Uncertainty (bootstrap over the 225 scene groups, paired): combined +0.0146 ± 0.0131, 95% [−0.011, +0.040], P(≤ 0)
     0.13; stage two +0.021 ± 0.014; ecshort w 2 +0.006 ± 0.013; ec w 4 −0.003 ± 0.014. Each training was run once, so
-    seed noise comes on top. Treat 0.456 as the best measured navhard score, not a proven improvement over 0.441. On
+    seed noise comes on top. Treat 0.456 as the best measured navhard score, not a proven improvement over 0.441. **Update 2026-11-15: not
+    replicated with seed 1 (finding 42).** On
     navtest the ecshort runs behave like the argmax-previous runs (w 2 +0.002 without a rule, below the reference with it).
     Submission pickle (job 15063317; trajectories identical to the scored ones, metadata as the 41.94 submission):
     `exp/submission_navhard_two_stage/rl3_ecshort4_b0.005_ep01_ec_short256_n64/submission.pkl`. Not submitted.
 41. Bests after this round: navtest v2 **0.9079** (rl3_b0.005, mixture λ 10 + sequential EC rule n 64); navhard
     **0.456** (rl3_ecshort4_b0.005, shortlist k 256 + EC rule n 64; caveat in finding 40), 0.441 for rl3_b0.005 with the
     same rule; navtest v2 without a test-time rule 0.8983 (rl3_ec2_b0.005, mixture λ 10).
+
+### Seed replicates (2026-11-15)
+
+`rl3_b0.005_s1` and `rl3_ecshort4_b0.005_s1`: the two runs of the navhard comparison (finding 40) retrained with
+`++seed=1`, recipes otherwise identical (experiments.md, "Seed replicates"). Predictions 15081432 / 15081453, scoring and
+EC rule 15081433-52 / 15081454-73, all 42 completed. Δ v2 = paired navtest difference per scene against rl3_b0.005
+seed 0 with the same rule. navhard as combined (stage one / two).
+
+| Rule | Model | Seed | navtest v2 | Δ v2 | EC | EP | navhard |
+|---|---|---|---|---|---|---|---|
+| argmax | rl3_b0.005 | 0 / 1 | 0.8920 / 0.8925 | – / +0.0005 ± 0.0015 | 0.780 / 0.779 | 0.892 / 0.887 | 0.365 / 0.378 |
+| | ecshort w 4 | 0 / 1 | 0.8907 / 0.8919 | −0.0013 / −0.0001 | 0.862 / 0.870 | 0.873 / 0.874 | 0.400 / 0.387 |
+| mixture λ 10 | rl3_b0.005 | 0 / 1 | 0.8965 / 0.8957 | – / −0.0008 ± 0.0013 | | | – |
+| | ecshort w 4 | 0 / 1 | 0.8944 / 0.8938 | −0.0020 / −0.0027 | | | – |
+| shortlist k 256 | rl3_b0.005 | 0 / 1 | 0.8836 / 0.8836 | – / +0.0000 ± 0.0010 | | | 0.419 / 0.425 (0.782 / 0.539) |
+| | ecshort w 4 | 0 / 1 | 0.8850 / 0.8837 | +0.0014 / +0.0001 | | | 0.425 / 0.421 |
+| argmax + EC rule n 64 | rl3_b0.005 | 0 / 1 | 0.9027 / 0.9026 | – / −0.0001 ± 0.0016 | 0.915 / 0.918 | 0.892 / 0.887 | 0.393 / 0.410 |
+| | ecshort w 4 | 0 / 1 | 0.8952 / 0.8940 | −0.0075 / −0.0087 | 0.946 / 0.948 | 0.872 / 0.873 | 0.413 / 0.400 |
+| shortlist + EC rule n 64 | rl3_b0.005 | 0 / 1 | 0.8944 / 0.8951 | – / +0.0007 ± 0.0010 | | | 0.441 / **0.454** (0.809 / 0.559) |
+| | ecshort w 4 | 0 / 1 | 0.8912 / 0.8902 | −0.0033 / −0.0042 | | | **0.456** / 0.444 (0.786 / 0.556) |
+| mixture + EC rule n 64 | rl3_b0.005 | 0 / 1 | 0.9079 / **0.9085** | – / +0.0006 ± 0.0013 | 0.917 / 0.919 | 0.889 / 0.884 | 0.435 / 0.447 (**0.811** / 0.545) |
+| | ecshort w 4 | 0 / 1 | 0.8996 / 0.8980 | −0.0083 / −0.0098 | 0.948 / 0.949 | 0.870 / 0.871 | 0.418 / 0.437 |
+
+n 16 (navtest v2 / navhard), seed 1: rl3_b0.005 argmax base 0.9009 / 0.403, shortlist base 0.8932 / 0.447, mixture base
+0.9058 / 0.444; ecshort w 4 0.8949 / 0.396, 0.8896 / 0.442, 0.8982 / 0.436. mixture_v1 λ 10 (v1): 0.9159 / 0.9062.
+
+navhard shortlist + EC rule n 64, rebuilt aggregation with a paired bootstrap over the 225 scene groups
+(`exp/headroom/navhard_weighted_seeds.py`, reproduces all four official scores):
+
+| Comparison | Combined difference |
+|---|---|
+| rl3_b0.005 seed 1 − seed 0 (same recipe) | +0.0127 ± 0.0122 |
+| ecshort w 4 seed 1 − seed 0 (same recipe) | −0.0118 ± 0.0083 |
+| ecshort w 4 − rl3_b0.005, seed 0 | +0.0146 ± 0.0131 |
+| ecshort w 4 − rl3_b0.005, seed 1 | −0.0099 ± 0.0113 |
+| mean of the two seeds: ecshort w 4 (0.4498) − rl3_b0.005 (0.4475) | +0.0023 ± 0.0097 |
+
+42. **The navhard gain of the shortlist previous plan (finding 40) does not replicate.** With seed 1 the order flips
+    (ecshort w 4 0.444 vs rl3_b0.005 0.454); over the two seeds the difference is +0.002 ± 0.010. Retraining the same
+    recipe with another seed moves navhard combined by ±0.012-0.013, as much as the difference that finding 40
+    reported, and the stage-two weighting (finding 40) is where it moves (the stage-one endpoints change with the seed).
+    So the EC reward with the shortlist previous plan has no measurable navhard effect, and differences between trained
+    models on navhard below ~0.025 cannot be resolved with one seed each.
+43. **navtest is reproducible across seeds.** rl3_b0.005 seed 1 matches seed 0 within the paired SE under every rule
+    (|Δ| ≤ 0.0008): argmax 0.8925, mixture 0.8957, argmax + EC rule 0.9026, mixture + EC rule 0.9085 (seed 0: 0.9079).
+    The finding that EC training costs navtest when the EC rule is used replicates (ecshort w 4 with argmax + rule
+    −0.0075 / −0.0087, with mixture + rule −0.0083 / −0.0098), as does its EC / EP trade-off (EC 0.86-0.87, EP 0.87).
+44. **Selection-rule effects replicate on navhard** (same model, larger than the seed noise): rl3_b0.005 seed 1 argmax
+    0.378 → shortlist k 256 0.425 → shortlist + EC rule n 64 0.454 (seed 0: 0.365 → 0.419 → 0.441); mixture + EC rule
+    gives the best stage one in both seeds (0.800 / 0.811).
+45. **Bests after the seed replicates.** navtest v2: mixture λ 10 + sequential EC rule n 64 on rl3_b0.005, 0.9079 /
+    0.9085 (seeds 0 / 1). navhard: shortlist k 256 + EC rule n 64, 0.441 / 0.454 for rl3_b0.005 and 0.456 / 0.444 for
+    ecshort w 4: one recipe-independent level of 0.449 ± ~0.01 (mean of the four runs). The highest single run is
+    0.456 (ecshort w 4 seed 0, pickle ready); choosing it among four runs on the public navhard split is a selection on
+    the test set, so for the thesis report the mean and spread; for the leaderboard any of the four is legitimate as
+    a single submission.
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 
