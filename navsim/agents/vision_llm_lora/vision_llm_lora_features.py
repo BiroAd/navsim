@@ -1,4 +1,5 @@
-from typing import Dict, Sequence, Tuple
+import os
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -17,7 +18,7 @@ from navsim.agents.vision_llm.vision_llm_features import (
 from navsim.common.dataclasses import AgentInput, Scene
 from navsim.common.enums import BoundingBoxIndex
 from navsim.planning.scenario_builder.navsim_scenario_utils import tracked_object_types
-from navsim.planning.training.abstract_feature_target_builder import AbstractTargetBuilder
+from navsim.planning.training.abstract_feature_target_builder import AbstractFeatureBuilder, AbstractTargetBuilder
 
 IMAGE_NORMALIZATION = {
     "imagenet": ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -36,11 +37,17 @@ class VisionLLMLoRAFeatureBuilder(VisionLLMFeatureBuilder):
         :param agent_input: input dataclass
         :return: [13, 3, tile, tile], or [12, 3, tile, tile] with thumbnail="none"
         """
+        mean, std = IMAGE_NORMALIZATION[self._config.image_normalization]
+        transform = T.Compose([T.ToTensor(), T.Normalize(mean=mean, std=std)])
+        return torch.stack([transform(image) for image in self._camera_images(agent_input, frame=-1)])
+
+    def _camera_images(self, agent_input: AgentInput, frame: int = -1) -> list:
+        """The tiles of one frame (agent_input.cameras[frame]; -1 = current) as RGB/BGR PIL images, before ToTensor and
+        normalization: _get_camera_feature for the current frame, the history builders for past frames."""
         tile = self._config.camera_width
         assert tile == self._config.camera_height, "camera tiles must be square"
-        mean, std = IMAGE_NORMALIZATION[self._config.image_normalization]
 
-        cameras = agent_input.cameras[-1]
+        cameras = agent_input.cameras[frame]
 
         if self._config.camera_layout == "original":
 
@@ -88,9 +95,89 @@ class VisionLLMLoRAFeatureBuilder(VisionLLMFeatureBuilder):
             if self._config.swap_red_blue:
                 zoom = cv2.cvtColor(zoom, cv2.COLOR_BGR2RGB)
             images.append(Image.fromarray(zoom))
+        return images
 
-        transform = T.Compose([T.ToTensor(), T.Normalize(mean=mean, std=std)])
-        return torch.stack([transform(image) for image in images])
+
+def camera_images_to_uint8(images: list) -> torch.Tensor:
+    """PIL tiles -> (M, 3, H, W) uint8: the pixels T.ToTensor() divides by 255 (lossless storage of a frame)."""
+    return torch.stack([torch.from_numpy(np.asarray(image, dtype=np.uint8).copy()).permute(2, 0, 1) for image in images])
+
+
+def normalize_uint8_camera(tiles: torch.Tensor, normalization: str) -> torch.Tensor:
+    """(..., 3, H, W) uint8 -> float32 normalized as VisionLLMLoRAFeatureBuilder (ToTensor, then Normalize)."""
+    mean, std = (torch.tensor(v, dtype=torch.float32, device=tiles.device).view(3, 1, 1)
+                 for v in IMAGE_NORMALIZATION[normalization])
+    return (tiles.float() / 255.0 - mean) / std
+
+
+class _MountedCacheRoot:
+    """
+    cache_root as CacheOnlyDataset reads it (once per file access). Several identical mounts of one squashfs image,
+    joined by os.pathsep, are used in turn: squashfuse serves one read at a time per mount, ~11 past-frame files/s
+    on Lustre (2026-11-10, login-node test; 8 mounts: 42 files/s), below phase 1's ~35 samples/s.
+    """
+
+    @property
+    def cache_root(self) -> Optional[str]:
+        roots = self._cache_roots
+        if not roots:
+            return None
+        pid = os.getpid()
+        if pid != self._cache_root_pid:  # each DataLoader worker (forked after construction) starts on its own mount
+            self._cache_root_pid, self._cache_root_index = pid, pid % len(roots)
+        self._cache_root_index = (self._cache_root_index + 1) % len(roots)
+        return roots[self._cache_root_index]
+
+    @cache_root.setter
+    def cache_root(self, value) -> None:
+        self._cache_roots: List[str] = [r for r in str(value).split(os.pathsep) if r] if value else []
+        self._cache_root_pid, self._cache_root_index = None, 0
+
+
+class VisionLLMLoRAHistoryFrameBuilder(_MountedCacheRoot, VisionLLMLoRAFeatureBuilder):
+    """
+    The camera tiles of a past frame (steps_back = 1, 2, 3: 0.5, 1.0, 1.5 s before the current frame) as uint8,
+    one cache file per frame (vision_llm_history_t<k>.gz) so a run loads only the frames it uses. Written by
+    scripts/training/cache_history_features.py into a squashfs image (cache_root = its mount point); at evaluation
+    the same builder computes them from the raw images of agent_input.cameras[-1 - steps_back].
+    """
+
+    def __init__(self, config, steps_back: int, cache_root=None):
+        super().__init__(config)
+        if steps_back not in (1, 2, 3):
+            raise ValueError(f"steps_back must be 1, 2 or 3 (NAVSIM keeps 3 history frames), got {steps_back}")
+        self._steps_back = steps_back
+        self.cache_root = cache_root
+
+    def get_unique_name(self) -> str:
+        return f"vision_llm_history_t{self._steps_back}"
+
+    def compute_features(self, agent_input: AgentInput) -> Dict[str, torch.Tensor]:
+        images = self._camera_images(agent_input, frame=-1 - self._steps_back)
+        return {f"camera_history_t{self._steps_back}": camera_images_to_uint8(images)}
+
+
+class VisionLLMLoRAEgoHistoryBuilder(_MountedCacheRoot, AbstractFeatureBuilder):
+    """
+    Ego status of the 3 past frames, most recent first (t-0.5, t-1.0, t-1.5 s), in the current ego frame as
+    AgentInput gives it: ego_history_pose (3, 3) x, y, heading; ego_history_velocity / ego_history_acceleration (3, 2);
+    ego_history_command (3,) argmax of the one-hot driving command. Cache file vision_llm_ego_history.gz.
+    """
+
+    def __init__(self, cache_root=None):
+        self.cache_root = cache_root
+
+    def get_unique_name(self) -> str:
+        return "vision_llm_ego_history"
+
+    def compute_features(self, agent_input: AgentInput) -> Dict[str, torch.Tensor]:
+        past = [agent_input.ego_statuses[-1 - k] for k in (1, 2, 3)]
+        return {
+            "ego_history_pose": torch.tensor(np.stack([s.ego_pose for s in past]), dtype=torch.float32),
+            "ego_history_velocity": torch.tensor(np.stack([s.ego_velocity for s in past]), dtype=torch.float32),
+            "ego_history_acceleration": torch.tensor(np.stack([s.ego_acceleration for s in past]), dtype=torch.float32),
+            "ego_history_command": torch.tensor([int(np.argmax(s.driving_command)) for s in past], dtype=torch.int64),
+        }
 
 
 class VisionLLMLoRATargetBuilder(VisionLLMTargetBuilder):

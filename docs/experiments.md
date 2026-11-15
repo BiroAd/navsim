@@ -619,7 +619,81 @@ Re-evaluation 2026-11-08 (all models, split pipeline, batch 64; [final_evaluatio
 RL β = 0.02 v1 0.899 / v2 0.872 / navhard 0.383 vs p3_aux_policy 0.892 / 0.867 / 0.386; navtest paired +0.0047 ± 0.0011
 (v2), +0.0073 ± 0.0012 (v1). navtest numbers within ±0.002 of the combined runs, navhard within ±0.012.
 
-Next: RL-3 (LoRA trainable, frozen scorer adapter) on p3_aux_policy with β = 0.02.
+### RL-3 / RL-4: LoRA, vision LoRA, planner queries and policy head trainable (2026-11-08/09)
+
+Config flags `rl_loss_weight`, `rl_beta`, `rl_reference_cache_path`, `rl_reference_head_path` (`vision_llm_lora_rl.py`,
+`rl_loss_terms`; tests `tests/test_vision_llm_lora_rl3.py`); per-scene data from `scripts/training/cache_rl_reference.py`
+(`exp/rl_reference/<model>/`). Same exact objective as RL-1; π_ref = the start model's frozen policy head on its cached
+fused state; all imitation and score losses 0; phase 3 with the start run's LR multipliers (traj 0.2); 4 GPUs, batch
+4 × accum 8, val every half epoch, monitor `val/rl/shortlist_256_gap`. The scorer stays the start model: evaluate with
+`SCORES_PRED=<start model predictions>`. Jobs and W&B ids: `exp/rl3_logs/rl3_runs_2026-11-08.txt`.
+All 2-epoch jobs show FAILED / OUT_OF_MEMORY: Lightning's teardown copied every rank's model to host RAM after `fit`
+(checkpoints and the last val were already written). Fixed in `run_training.py` (`KeepModelOnDeviceDDPStrategy`,
+`tests/test_run_training_teardown.py`); 14929861 is the first job with it (COMPLETED).
+
+Val proxy at the best `shortlist_256` validation (18,179 scenes; start = RL-1 epoch 0, same features and rewards):
+
+| Start model | Run | best val | k = 256 | argmax | E_π[r] | argmax = 0 | KL | RL-1 best k = 256 at this β |
+|---|---|---|---|---|---|---|---|---|
+| p3_aux_policy ep 3 | start | | 0.8269 | 0.7888 | 0.7166 | 0.1315 | 0 | |
+| | `rl3_b0.05` (W&B 9udwu19i) | 2 ep | 0.8426 | 0.8466 | 0.8187 | 0.0735 | 0.66 | 0.8331 |
+| | `rl3_b0.02` (h3x58s9j) | 2 ep | 0.8466 | 0.8533 | 0.8345 | 0.0702 | 1.17 | 0.8357 |
+| | `rl3_b0.005` (523dciyw) | 2 ep | **0.8506** | **0.8548** | **0.8455** | **0.0664** | 3.06 | 0.8366 |
+| | `rl3_b0.02_ep5` (3wohi0k3) | 3 of 5 ep | 0.8467 | 0.8509 | 0.8338 | 0.0727 | 1.38 | |
+| p3_heads_policy ep 2 | start | | 0.8170 | 0.7786 | 0.7077 | 0.1421 | 0 | |
+| | `rl3_heads_b0.05` (yyxe9n1q) | 2 ep | 0.8327 | 0.8310 | 0.8045 | 0.0879 | 0.63 | 0.8230 |
+| | `rl3_heads_b0.02` (ub82zval) | 2 ep | 0.8362 | 0.8361 | 0.8181 | 0.0854 | 1.12 | 0.8246 |
+| | `rl3_heads_b0.005` (m8j8so68) | 2 ep | **0.8387** | **0.8403** | **0.8304** | **0.0832** | 2.53 | (not run) |
+
+- RL-3 beats RL-1 at every β by +0.010 to +0.014 (k = 256), on both start models; the two models keep their ~0.01 gap.
+- Lower β is better on val (0.05 < 0.02 < 0.005) on both models, unlike RL-1 (flat below 0.02). RL-1's val-best
+  looser β was worse on navtest v2 officially (EC is not in the reward), so the official runs decide.
+- The policy's argmax now matches or beats the k = 256 shortlist pick (start: 0.789 vs 0.827).
+- 5 epochs instead of 2 (β = 0.02): no gain; k = 256 peaks at 3 ep (0.8467) and ends at 0.8453, argmax 0.8542 at 4.5 ep.
+
+### Phase-1 scorer-only runs (2026-11-08)
+
+`p1h_heads` (14929075, W&B w3rxso3k) and `p1h_heads_aux` (14929076, a4qcps8f, + aux 3/3/1): phase 1 from scratch,
+only `pdm_score_loss_weight` 1 and `pdm_total_score_loss_weight` 1 (CE 0, ED 0), monitor `val/pdm_scores/head_score_gap`,
+20 epochs with patience 5. Both early-stopped after epoch 13 (best epoch 8; FAILED status = the teardown OOM above).
+Best val `head_score`: 0.8235 / 0.8249. In phase 1 the aux loss can only train the aux decoder (the image tokens
+precede every trainable input in the causal LLM), so the 0.0014 difference is run-to-run noise. Phase-3 scorers for
+reference: p3_heads 0.8497 (ep 5), p3_aux 0.8585 (ep 5). p1d_total has no val `head_score` in W&B (the metric was added
+later); p3_heads after its first phase-3 epoch from p1d_total ep 10 was at 0.8102.
+
+### Phase 3 from the scorer-only phase 1 (p3h, 2026-11-09/10)
+
+Recipes of p3_heads / p3_aux, start = p1h best epoch 8 (`exp/p3h_logs/p3h_runs_2026-11-09.txt`); all three stopped
+early (patience 3). Best val `head_score`:
+
+| Run (job, W&B) | start | aux | best (epoch) | compare |
+|---|---|---|---|---|
+| `p3h_heads` (14933662, e67uguex) | p1h_heads | – | 0.8352 (4) | p3_heads 0.8497 |
+| `p3h_aux` (14933663, 2ttxv032) | p1h_heads | 3/3/1 | 0.8498 (4) | p3_aux 0.8585 |
+| `p3h_heads_aux` (14933664, iv88b7mt) | p1h_heads_aux | 3/3/1 | 0.8434 (5) | p3_aux 0.8585 |
+
+Starting from a scorer-only phase 1 is worse by 0.009-0.015: the phase-1 head start (epoch 0: 0.824-0.837 vs
+0.810-0.818) is gone after one epoch and the runs plateau lower. p1d_total (CE + scores in phase 1) stays the better
+start. The two aux jobs show FAILED / OUT_OF_MEMORY after training (host memory crept to 93-94% of 30G over 9-11 h and
+the teardown's optimizer move to CPU tipped it); `KeepModelOnDeviceDDPStrategy` now skips that move as well.
+
+### Pairwise neighbour score loss (2026-11-10)
+
+`pairwise_score_loss_weight` (vision_llm_lora_loss.py `pairwise_score_loss`; tests
+`tests/test_vision_llm_lora_pairwise_score.py`). Both runs from p3_aux best epoch 5 with the p3_aux recipe for 5 more
+epochs (fresh warmup + cosine); the control differs only in the pairwise weight (`exp/p3_pair_logs/`).
+
+| Run (job) | pairwise weight | val head_score per epoch | best | val pair_acc (NC/DAC/DDC pairs near GT) |
+|---|---|---|---|---|
+| p3_aux (reference) | 0 | | 0.8585 (ep 5) | not measured |
+| `p3_aux_ctrl` (14935958) | 0 | 0.8552 0.8592 0.8597 0.8555 0.8565 | 0.8597 (ep 2) | not logged |
+| `p3_aux_pair` (14935930) | 1.0 | 0.8488 0.8536 0.8556 0.8494 0.8505 | 0.8556 (ep 2) | 0.913 → 0.925 |
+
+The extra epochs alone add +0.0012 head_score (noise level); the pairwise loss costs −0.004 head_score against its
+control while raising pair accuracy. Combined with the RL-3 β = 0.02 policy on navtrain val it is nevertheless the
+best scorer for every selection rule (shortlist k = 256 +0.0012 vs argmax instead of −0.0061, mixture λ = 10 +0.0052
+instead of +0.0007, local N 64 λ 0.2 positive for the first time; control in between): final_evaluation.md,
+"Scorer swap on val". Official runs with it are the next step.
 
 ## Round 4 (finished 2026-11-02 ~15:00): score-head loss
 
@@ -674,3 +748,306 @@ accumulation 8. The trajectory-embedding head is smaller than the linear one.
   score-head selection flag in `compute_trajectory`, official EPDMS of the best checkpoints, then RL from
   `p3_combo_balanced` epoch 8 on the precomputed codebook scores (Round 6, "Phase 3 decision before RL").
 - Disk: per-epoch checkpoints of finished runs (~18 × 8.8 GB each) can be deleted once the kept epochs are chosen.
+
+### Phase 1 with past inputs (p1hist, started 2026-11-10)
+
+p1d_total recipe unchanged (trajemb 1024, 8 queries, ED 1.0, T 1, score 1 / total 1; monitor `stabilize/val/fde_loss`,
+patience 10, 20 epochs; 4 GPUs batch 8 × accum 4), one change each; past inputs read from
+`dataset/images/history_navtrain.sqfs` (`HISTORY_CACHE=1`, 16 squashfuse mounts read in turn: one mount serves
+~11 past-frame files/s and held the first p1hist_prev (14949462) at 0.32 it/s; 8 mounts gave 42 files/s on the login node).
+First submission 14949462-64 crashed: diagnostic `srun --overlap` steps wiped the jobs' /tmp (DataLoader sockets). 12 CPUs / 46G / 22 h, 4 workers per GPU
+(`exp/p1hist_logs/p1hist_runs_2026-11-10.txt`). Baseline: `p1d_total` (14810662, best epoch 10).
+
+| Run | Job | Change |
+|---|---|---|
+| `p1hist_prev` | 14949469 | `temporal_history_frame=1`: the t−0.5 s frame fills Qwen's second temporal slot (same 208 image tokens) |
+| `p1hist_ego` | 14949470 | `ego_history_tokens=true`: 3 past poses (x, y, yaw; ego frame) as `<EGO_STATE>` tokens, dropout 0.5 |
+| `p1hist_both` | 14949471 | both |
+| `p1hist_none` | 14949472 | none: the same recipe on the current code (code drift and run-to-run noise vs p1d_total) |
+
+Results (2026-11-11; W&B p1hist_prev unzxpa6o, p1hist_ego 42y9tq9c, p1hist_both 3y5px581, p1hist_none 70nk1gxk;
+p1d_total 876ig2il). All ran 20 epochs (14.7-15.0 h); best checkpoint = best val FDE, as for p1d_total. val argmax / head
+score = `val/pdm_scores/{argmax,head}_score` (not logged for p1d_total, so p1hist_none is the reference for them).
+
+| Run | best epoch | val FDE (best) | argmax at best | head at best | mean ep 8-19: FDE / argmax / head |
+|---|---|---|---|---|---|
+| p1d_total (2026-11-01) | 10 | 1.957 | – | – | 1.973 / – / – |
+| `p1hist_none` | 12 | 1.967 | 0.722 | 0.793 | 1.978 / 0.724 / 0.790 |
+| **`p1hist_ego`** | 15 | **1.883** | **0.737** | **0.800** | **1.904 / 0.734 / 0.797** |
+| `p1hist_prev` | 12 | 2.024 | 0.712 | 0.788 | 2.037 / 0.714 / 0.786 |
+| `p1hist_both` | 12 | 1.994 | 0.719 | 0.790 | 2.010 / 0.722 / 0.787 |
+
+- The ego history tokens help at every epoch from 2 on: FDE −0.074 m (−3.7%), argmax +0.010, head +0.007 (means
+  over epochs 8-19 vs p1hist_none).
+- The previous frame hurts in phase 1 (FDE +0.06 m, argmax −0.010) and cancels most of the ego gain in p1hist_both.
+  In phase 1 the vision tower is frozen: its pretrained Conv3d patch embedding mixes the two frames into one temporal
+  patch, which likely blurs the current frame where the scene moves, and only the heads can adapt (UNVERIFIED).
+  Phase 3 trains the vision LoRA, so phase 1 does not settle whether the frame can help.
+- p1hist_none reproduces p1d_total within noise (best FDE 1.967 vs 1.957, mean 1.978 vs 1.973): the code changes
+  since 2026-11-01 do not alter the phase-1 recipe.
+
+Phase 3 (submitted 2026-11-11): p3_aux recipe exactly (overrides of p3_aux 14873887: score 5/5, aux 3/3/1, CE/ED 0, LoRA
+lang 0.2 / vision 0.1, vision LoRA r16/α32; 10 epochs, patience 3, monitor `val/pdm_scores/head_score_gap`; 4 GPUs batch
+4 × accum 8; `AUX_TARGETS=1`, history runs also `HISTORY_CACHE=1`), from each run's best phase-1 checkpoint; 8 CPUs
+(2 per task) / 32000M / 13 h, `gpu,ai` (first submission 14967646-49 asked for 32 CPUs and could not start). Baselines: p3_aux (from p1d_total) and p3hist_none.
+
+| Run | Job | Start |
+|---|---|---|
+| `p3hist_none` | 14967704 | p1hist_none ep 12 |
+| `p3hist_ego` | 14967705 | p1hist_ego ep 15 |
+| `p3hist_prev` | 14967706 | p1hist_prev ep 12 |
+| `p3hist_both` | 14967707 | p1hist_both ep 12 |
+
+Results (2026-11-12; W&B none 0iqou1j4, ego cgbi9ymv, prev pimmr35e, both f7gcookv; p3_aux d8vbo5hz). All stopped by
+patience 3 after 8-9 epochs (10.9-12.3 h). Best = lowest `val/pdm_scores/head_score_gap`.
+
+| Run | best epoch | val head_score | val score BCE | vs p3hist_none |
+|---|---|---|---|---|
+| p3_aux (2026-11-05) | 5 | 0.8585 | 0.2392 | −0.0006 |
+| `p3hist_none` | 5 | **0.8591** | 0.2394 | – |
+| `p3hist_ego` | 5 | 0.8572 | **0.2389** | −0.0019 |
+| `p3hist_prev` | 4 | 0.8511 | 0.2436 | −0.0080 |
+| `p3hist_both` | 5 | 0.8522 | 0.2454 | −0.0069 |
+
+- p3hist_none reproduces p3_aux (0.8591 vs 0.8585): run-to-run noise ~0.001, epoch-to-epoch ~0.002-0.003.
+- The previous frame hurts the scorer also with the vision LoRA trained (−0.007 to −0.008, worse BCE at every epoch):
+  under the p3_aux recipe (vision LR ×0.1, vision LoRA r16) phase 3 does not recover the phase-1 loss.
+- The ego history tokens tie the baseline as a scorer (−0.0019, within epoch noise; BCE marginally best). Their phase-1
+  gain was in the policy (val FDE −3.7%), which phase 3 does not train (CE/ED 0); the next stage (policy head) tests it.
+
+Policy head on all four (submitted 2026-11-12): p3_aux_policy recipe exactly (overrides of 14905303: policy head only,
+score-aware labels, CE 1 / ED 1, traj LR ×1.0, score 5/5 with heads frozen, no aux; 4 epochs, patience 2, monitor
+`val/pdm_scores/argmax_score_gap`; batch 8 × accum 4), from each p3hist best checkpoint; 8 CPUs / 32000M / 5.5 h, `gpu,ai`.
+Jobs: p3hist_none_policy 14999967, p3hist_ego_policy 14999968, p3hist_prev_policy 14999969, p3hist_both_policy 14999970.
+Reference: p3_aux_policy (14905303) val argmax 0.820 (ep 1). Then RL-3.
+
+Results (all finished 2026-11-13; per-epoch values from the W&B run files, val = navtrain val 18,179 scenes):
+
+| Run | job, time | best ep | val argmax score, ep 0 / 1 / 2 / 3 | expected score (ep 3) | soft CE (ep 3) | expected ADE (ep 3) | head score (frozen) |
+|---|---|---|---|---|---|---|---|
+| `p3_aux_policy` (reference, from p1d_total) | 14905303, 3.5 h | 3 | 0.810 / **0.820** / 0.818 / 0.820 | 0.745 | 5.543 | 1.052 | 0.8585 |
+| `p3hist_none_policy` | 14999967, 3.6 h | 2 | 0.807 / 0.812 / **0.813** / 0.813 | 0.744 | 5.654 | 1.042 | 0.8589 |
+| `p3hist_ego_policy` | 15016982, 1.8 h | 2 | 0.814 / 0.815 / **0.818** / 0.817 | **0.748** | 5.622 | **1.015** | 0.8568 |
+| `p3hist_prev_policy` | 14999969, 3.5 h | 2 | 0.799 / 0.804 / **0.804** / 0.803 | 0.736 | 5.662 | 1.020 | 0.8507 |
+| `p3hist_both_policy` | 15016983, 2.2 h | 1 | 0.803 / **0.810** / 0.809 / 0.809 | 0.741 | 5.601 | 1.017 | 0.8529 |
+
+(First attempts of ego/both, 14999968/70, ran out of GPU memory in step 1; see below. Expected score = Σ p·score over
+the codebook under the policy; head score = total of the frozen sub-score heads' best entry, identical every epoch.)
+
+- Matched comparison (same phase-1 recipe, p3hist_none as baseline): **ego history +0.004 argmax** (0.818 vs 0.813),
+  expected ADE −2.6%, expected score +0.004; previous frame −0.009; both −0.004. Same ordering as phase 1 (ego helps
+  the policy, the previous frame hurts) and phase 3 (scorer: ego tie, prev/both −0.007/−0.008).
+- Noise: the two no-history runs differ by 0.007 argmax (p3_aux_policy 0.820 vs p3hist_none_policy 0.813; different
+  phase-1 start, same head score), so the ego gain (+0.004) is within run-to-run spread; no history variant beats p3_aux_policy.
+- As scorers nothing changes in this stage (heads frozen): ego ties the baseline, prev/both are worse.
+- Not yet measured: shortlist / mixture proxies and the official evaluation of these runs (needs the history-cache
+  override in `cache_policy_head_features.py` / `predict_vision_llm_lora_cache.py`, see "Open" below).
+
+**OOM cause (CONFIRMED, reproduced on a tiny Qwen3.5 + PEFT model):** policy-only runs kept all LLM activations.
+`gradient_checkpointing_enable()` and `enable_input_require_grads()` each register an input-embedding hook that sets
+`requires_grad`, and transformers keeps only the last call's handles, so `_freeze_all_but_policy_head` removed one and
+the other stayed; the freeze also turns gradient checkpointing off. Every policy-only run, p3_aux_policy included, ran at the GPU's
+limit (sacct peak gpumem 39.5-40.4 GB) and at phase-1 speed (~0.9 it/s); the ego/both runs went just over. Results are
+unaffected (only the policy head had trainable parameters; same forward values). Fix (2026-11-13): `VisionLLMLoRAModel.forward`
+runs `_encode_inputs` and the LLM under `torch.no_grad()` when `train_policy_head_only`; test
+`test_policy_only_forward_keeps_no_backbone_graph`. The resubmitted runs use the same recipe (batch 8 × accum 4).
+With the fix (15016982/83, started 2026-11-13 12:39): peak GPU memory 11.3 GB (was ~40 GB), 2.0 it/s (was ~0.9).
+Affected (slow, valid): the 7 `train_policy_head_only` runs (p3_aux_policy, p3_heads_policy, p3_combo_balanced_aux_policy,
+p3hist_*_policy). Not affected: phases 1-3 and RL-3 (they need the backward pass), RL-1/RL-2 (cached head inputs).
+Open: `cache_policy_head_features.py` and `predict_vision_llm_lora_cache.py` build the agent from the run config,
+whose `history_cache_path` is the training job's mount; they need a history mount and an override before RL-3 / val
+predictions of these runs. The official evaluation computes past frames from the raw images (no cache needed).
+
+### RL-3 on the p3hist policy models (submitted 2026-11-13)
+
+Question: does the ego history (or the previous frame) still help after RL-3, the step that gave the best models?
+Recipe of `rl3_b0.005` exactly (exact objective, β = 0.005, LoRA + vision LoRA + planner queries + policy head, traj LR
+×0.2, imitation and score losses 0, 2 epochs, batch 4 × accum 8, val every half epoch, monitor
+`val/rl/shortlist_256_gap`), from each policy run's best epoch (none ep 2, ego ep 2, prev ep 2, both ep 1).
+β = 0.005 (first submitted with 0.02, cancelled before starting): with a scorer, 0.005 is better on navtest v1 with
+every scorer (mixture_v1 λ 10: own 0.9165 vs 0.9131, pairwise 0.9180 vs 0.9162, control 0.9176 vs 0.9142) and on
+navhard (control k 256 0.419 vs 0.409, own mixture λ 3 0.374 vs 0.348, pairwise k 256 0.382 vs 0.364); 0.02 wins only
+navtest v2 with the own / pairwise scorer (+0.002) and loses it with the control scorer (0.8953 vs 0.8965). The
+argmax-only comparison (v2 0.895 vs 0.892) had pointed to 0.02.
+`rl3_b0.005_p3hist_none_policy` is the matched baseline (p3hist_none_policy differs from p3_aux_policy by 0.007 val argmax).
+
+Chain per model (`exp/rl3_logs/rl3_hist_runs_2026-11-13.txt`): merge the policy-only checkpoint (cpu) → fused-state
+cache in 3 shards (1 GPU each; `run_rl_policy_head_slurm.sh` now takes `HISTORY_CACHE=1`, and
+`cache_policy_head_features.py --history-cache-path` replaces the training job's temporary mounts) → RL-3, which builds
+the RL reference in /dev/shm at job start (`RL_REFERENCE=<rl_features name>` in the training script; no 103k files on
+/project, no squashfs packing). Jobs: none 15026637 / 38-40 / **15026641**, ego 15026642 / 43-45 / **15026646**,
+prev 15026647 / 48-50 / **15026651**, both 15026652 / 53-55 / **15026656** (merge / cache / RL-3); the four RL-3 jobs
+(β 0.02) were cancelled before starting and resubmitted with β 0.005: **15026878 / 79 / 80 / 81** (none / ego / prev / both).
+Caches: 12 × 32-33 min, 103,288 scenes per model, ~20.5 scenes/s, peak GPU 22.5 GB. All four RL-3 jobs started
+2026-11-13 20:13-20:16; the in-job RL reference (/dev/shm, 1.6 GB, 103,288 scenes, 0 skipped) took ~2 min; ~1.3-1.4 it/s.
+Evaluation plan: argmax (no scorer); shortlist / mixture with each start model's own frozen scorer (as the first RL-3
+evaluation) and with one common scorer (p3_aux_ctrl) for all four, which isolates the policy.
+
+Results (all four `COMPLETED`, 2 h 29 min - 2 h 44 min; W&B val on navtrain val, `val/rl/*_epoch`; best checkpoint =
+epoch 1 in every run). Each cell: argmax / shortlist k 256, at the four validations (every half epoch):
+
+| Run | ep 0.5 | ep 1 | ep 1.5 | **ep 2 (final)** | E_π[r] final | KL final |
+|---|---|---|---|---|---|---|
+| `rl3_b0.005` (from p3_aux_policy, reference) | 0.8255 / 0.8405 | 0.8440 / 0.8461 | 0.8505 / 0.8480 | **0.8548 / 0.8506** | 0.8455 | 3.06 |
+| `rl3_b0.005_p3hist_none_policy` | 0.8185 / 0.8358 | 0.8379 / 0.8453 | 0.8454 / 0.8460 | 0.8518 / 0.8478 | 0.8409 | 2.62 |
+| `rl3_b0.005_p3hist_ego_policy` | 0.8233 / 0.8388 | 0.8377 / 0.8434 | 0.8444 / 0.8457 | 0.8513 / 0.8476 | 0.8425 | 2.57 |
+| `rl3_b0.005_p3hist_prev_policy` | 0.8097 / 0.8289 | 0.8206 / 0.8340 | 0.8424 / 0.8380 | 0.8464 / 0.8405 | 0.8360 | 2.68 |
+| `rl3_b0.005_p3hist_both_policy` | 0.8186 / 0.8355 | 0.8272 / 0.8386 | 0.8432 / 0.8437 | 0.8452 / 0.8440 | 0.8357 | 2.63 |
+
+- RL-3 keeps the order of the starts: the matched baseline (none) and ego end level (0.8478 vs 0.8476 shortlist k 256,
+  0.8518 vs 0.8513 argmax); the ego history's +0.004-0.005 argmax lead of the policy stage is gone after RL-3. prev and
+  both stay behind (−0.007 / −0.004 shortlist), as before RL.
+- All four are 0.003-0.010 below the p3_aux_policy reference, the same gap as their starts (0.813-0.818 vs 0.820 val
+  argmax; the no-history runs differ by 0.007 from seed / phase-1 recipe alone).
+- val has no EC and no reactive stage two, so the official navtest / navhard runs decide; on val, history does not help.
+
+Official evaluation (2026-11-14; full tables and paired differences in final_evaluation.md, "Models with past inputs";
+findings 33-35 there): **ego history is the only past input with a consistent gain**: RL-3 ego beats RL-3 none on navtest
+v2 with every scorer (+0.0018 to +0.0052, up to 3 SE) and on navhard (control scorer 0.418 vs 0.384). prev / both give
+nothing reliable. No history model beats the no-history reference rl3_b0.005 (navtest v2 0.8965 / v1 0.9180, navhard
+0.419): RL-3 none, the matched baseline, is 0.005-0.0065 below it (run-to-run variation as large as the ego effect), and
+RL-3 ego lands in between (navhard 0.418, navtest −0.002 to −0.003). One run per variant, so the ego gain is suggestive,
+not conclusive.
+
+### RL-3 with two-frame extended comfort in the reward (submitted 2026-11-14)
+
+Motivation: EC-aware selection on the saved predictions (final_evaluation.md, "EC-aware selection") gave navtest v2
++0.0077 to +0.0107 and navhard +0.022 at almost no cost; the question is whether the policy can learn it.
+
+Recipe of `rl3_b0.005` exactly (from p3_aux_policy ep 3, exact objective, β = 0.005, LoRA + vision LoRA + planner
+queries + policy head, traj LR ×0.2, other losses 0, 2 epochs, batch 4 × accum 8, val every half epoch, monitor
+`val/rl/shortlist_256_gap`), plus `rl_ec_weight` (new config field, default 0 = off):
+- **Previous plan:** the current model's argmax at t − 0.5 s, recomputed in every training and validation step: a
+  no-grad forward in eval mode on the past frame's camera tiles (history cache, `vision_llm_history_t1`) and past
+  velocity / acceleration / driving command (`vision_llm_ego_history`) (`VisionLLMLoRAAgent._ec_against_previous_plan`,
+  called from `compute_loss`, so evaluation is unaffected). On-policy: the plan follows the model as it trains;
+  no gradient through it.
+- **EC on the GPU** (`navsim/agents/vision_llm_lora/ec_torch.py`): all 16,384 entries at t against the previous plan,
+  each simulated from its own frame's logged velocity / acceleration with a torch port of PDMSimulator (LQR tracker +
+  kinematic bicycle) and the official EC features (Savitzky-Golay filters as matrices). The tracker reference of each
+  entry is scene-independent and precomputed once with the official numpy code
+  (`scripts/training/precompute_ec_tracking.py` → `exp/codebook/16384_8step_ec_tracking.npz`). Tests
+  (`tests/test_vision_llm_lora_ec_torch.py`): simulated states match the official simulator within 1e-6, EC decisions
+  are identical (864 checks); at real log timestamps ≥ 99% agree (the official code truncates `int(time_s * 1e6)`, which
+  moves some samples by 1 µs depending on the timestamp). End-to-end check on navtest pairs: job 15046015
+  (`scripts/evaluation/validate_ec_torch.py`, against the official EC of rl3_b0.005 argmax).
+- **Reward:** M · (5 EP + 5 TTC + 2 LK + 2 HC + w · EC) / (14 + w) = (14 r + w M EC)/(14 + w), with r the cached
+  unfiltered codebook total and M = NC · DAC · DDC · TLC (new `rl_multiplier` in the RL reference, set to 0 where r = 0).
+  w = 2 is the official EPDMS weighting. Approximation: the stored sub-scores carry the human-penalty filter, r does
+  not; where the filter changed a sub-score (~2.3% of entries) M can be off, so the EC bonus there is off by at most
+  w/(14 + w) · 0.5.
+- New val metrics: `val/rl/ec_argmax` (EC of the argmax vs the previous plan), `ec_expected`, `ec_any` (share of scenes
+  with at least one consistent entry), `argmax_no_ec` (argmax under the old reward, comparable to rl3_b0.005).
+- Cost: one extra forward pass (no grad) per step plus the EC simulation; `HISTORY_CACHE=1`.
+
+| Run | Job | rl_ec_weight | Start |
+|---|---|---|---|
+| `rl3_ec2_b0.005` | ~~15046017~~ → **15046364** | 2 (official) | 2026-11-14 |
+| `rl3_ec4_b0.005` | ~~15046018~~ → **15046365** | 4 (double) | 2026-11-14 |
+
+Validation job 15046015 (4 min): tracking precompute 52 s; on 10,040 navtest pairs the torch EC of rl3_b0.005's argmax
+outputs agrees with the official EC in **100.00%** of pairs (mean 0.7799 both). First submission 15046017/18 ran at
+~0.6 it/s (rl3_b0.005: ~1.35 it/s), so 2 epochs would have exceeded the 5 h limit (the limit cannot be raised by the
+user); cancelled after ~25 min and resubmitted with 7 h and EC simulated only for the entries with M > 0 (EC does not
+change the reward of the others, ~72% of all entries; exact, tested): the EC val metrics therefore count EC only on
+entries with M > 0.
+
+Log: `exp/rl3_logs/rl3_ec_runs_2026-11-14.txt`. Planned evaluation: argmax, argmax + EC rule, shortlist k 256 (control
+scorer) and shortlist + EC rule, on navtest and navhard, against rl3_b0.005 (0.8920 / 0.365 argmax; 0.9027 / 0.441
+with the EC rule).
+
+First val (half epoch, step 332, navtrain val): `argmax_no_ec` 0.8116 (w 2) / 0.8066 (w 4) vs rl3_b0.005's argmax
+0.8255 at the same step; `ec_argmax` 0.715 / 0.738 (EC and M > 0; at most 1 − argmax_zero ≈ 0.905); KL 3.78 / 3.60
+vs 3.08. At this point the EC runs pay in the other sub-scores without much EC gain yet.
+Epoch 1 (step 664): `argmax_no_ec` 0.8289 / 0.8199 vs 0.8440 (−0.015 / −0.024); `ec_argmax` 0.735 / 0.765 (EC among
+entries with M > 0: 0.80 / 0.84, start ~0.78); argmax under the EC reward 0.8167 / 0.8066; KL 3.13 / 3.25 vs 3.45. The
+EC gain stays small and the cost in the other sub-scores stays. rl3_b0.005's EC on val is not measured, so its value
+under the EC reward is an estimate: ≈ (14 · 0.8440 + 2 · ~0.73) / 16 ≈ 0.83 (UNVERIFIED), above both EC runs.
+Epoch 1.5 (step 997): `argmax_no_ec` 0.8408 / 0.8330 vs 0.8505 (−0.010 / −0.018: the w 2 gap narrows); EC among
+M > 0 entries 0.81 / 0.84; argmax under the EC reward 0.8291 / 0.8192 (reference estimate ≈ 0.836, UNVERIFIED).
+**Final (epoch 2, step 1329; both `COMPLETED` in 6 h 20 min; best = last = epoch 1 checkpoint):** `argmax_no_ec`
+0.8500 (w 2) / 0.8422 (w 4) vs 0.8548 (−0.005 / −0.013); EC among M > 0 entries 0.82 / 0.85 (start ~0.78); argmax
+under the EC reward 0.8387 / 0.8291 vs the reference estimate ≈ 0.839 (UNVERIFIED): w 2 about level on the official
+weighting, w 4 below. `shortlist_256` (EC reward) 0.8231 / 0.8070; KL 2.95 / 3.52. A C++ TCPStore trace at the end of
+the w 2 log is from process teardown after `Trainer.fit` finished (harmless).
+**Official evaluation (2026-11-14; final_evaluation.md "RL-3 with EC in the reward: official evaluation", findings 36-38):** without a test-time rule, w 2 gains navtest v2 +0.002 with every rule (argmax 0.8943, mixture 0.8983, shortlist 0.8859; EC 0.78 → 0.85, EP 0.892 → 0.879) and navhard argmax 0.365 → 0.376, but navhard shortlist 0.419 → 0.415; w 4 is worse. With the EC rule both are below rl3_b0.005 (navtest 0.8996 / 0.8943 vs 0.9027; navhard 0.439 / 0.438 vs 0.441): the rule gives the EC gain anyway, the EP loss stays.
+Shortlist previous plan, first val (step 332): `argmax_no_ec` 0.8081 (w 2) / 0.8060 (w 4) vs 0.8255; `ec_argmax`
+0.653 / 0.686 (EC of the argmax at t against the shortlist pick at t − 0.5 s, so lower than with the argmax previous
+plan); `shortlist_256` (EC reward) 0.8151 / 0.7994 vs 0.8102 / 0.7905 for the argmax-previous runs at the same step.
+Epoch 1 (step 664): `argmax_no_ec` 0.8346 / 0.8254 vs 0.8440 (argmax-previous runs 0.8289 / 0.8199); epoch 1.5 (step
+997): 0.8432 / 0.8370 vs 0.8505 (0.8408 / 0.8330).
+**Final (epoch 2, step 1329; 15049985 / 15049986 `COMPLETED` in 6 h 22 min / 6 h 20 min; best = last = epoch 1
+checkpoint):**
+
+| Run (w) | `argmax_no_ec` | argmax (EC reward) | `ec_argmax` (EC among M > 0) | `shortlist_256` (EC reward) | KL |
+|---|---|---|---|---|---|
+| rl3_b0.005 (reference, no EC) | 0.8548 | – | – | – | – |
+| rl3_ec2 (argmax previous) | 0.8500 | 0.8387 | 0.763 (0.82) | 0.8231 | 2.95 |
+| **rl3_ecshort2** (shortlist previous) | **0.8517** | 0.8327 | 0.701 (0.75) | **0.8263** | 3.05 |
+| rl3_ec4 (argmax previous) | 0.8422 | 0.8291 | 0.787 (0.85) | 0.8070 | 3.52 |
+| rl3_ecshort4 (shortlist previous) | 0.8454 | 0.8182 | 0.725 (0.78) | 0.8108 | 3.48 |
+
+`argmax_no_ec` (old reward, no EC) is directly comparable: the shortlist-previous runs lose less against the reference
+(−0.003 / −0.009 vs −0.005 / −0.013). EC and the EC-reward columns are measured against each run's own previous plan
+(argmax vs shortlist pick at t − 0.5 s), so they compare only within a previous-plan type: EC against the shortlist pick
+is lower because that pick is often outside the policy's mode. `shortlist_256` uses the same start-model shortlist for
+all runs, but its EC term also uses the run's own previous plan; it is the closest val proxy to the target
+(shortlist + EC rule on navhard): +0.003 / +0.004 over the argmax-previous runs.
+Official evaluation submitted 2026-11-14 21:22 (same chain as rl3_ec2/ec4, scratchpad `submit_rl3_ec_eval.sh`): predict
+15058967 / 15058984, scoring 15058968-73 / 15058985-90, EC rule selection 15058974-75 / 15058991-92, EC rule scoring
+15058976-83 / 15058993-15059000 (log `exp/rl3_logs/rl3_ec_runs_2026-11-14.txt`). Shortlist k 64 and navhard mixture
+not run: on rl3_b0.005 they are well below shortlist k 256 on navhard (0.396 / 0.395 vs 0.419).
+EC rule on the mixture base (λ 10; new `--bases mixture` of `ec_aware_selection.py`, default unchanged) for rl3_b0.005,
+rl3_ec2/ec4 and rl3_ecshort2/4, navtest sequential + navhard: submitted 2026-11-14 21:38 (job IDs in
+final_evaluation.md and the log). All completed.
+**Official evaluation of the shortlist-previous runs and the mixture + EC rule (final_evaluation.md "Shortlist previous
+plan and the EC rule on the mixture base", findings 39-41):** mixture + EC rule n 64 is the best navtest rule: rl3_b0.005
+v2 **0.9079** (+0.0052 ± 0.0012 over argmax + rule 0.9027, same model; the mixture and rule gains add). ecshort w 4 with
+shortlist + EC rule n 64 reaches navhard **0.456** (w 2 0.447; rl3_b0.005 0.441, ec2/ec4 0.439 / 0.438), but the
+gain is in stage two (0.570 vs 0.549; stage one level): its stage-one plans end where the follow-up synthetic scenes go
+better for either model, while both drive a given synthetic scene about equally well (swap of driving vs endpoint weights: 0.001-0.006 vs 0.015-0.022; finding 40); combined +0.015 ± 0.013 (bootstrap over scene groups), one seed per run.
+Submission pickle: `exp/submission_navhard_two_stage/rl3_ecshort4_b0.005_ep01_ec_short256_n64/submission.pkl`. On navtest the ecshort runs behave
+like the argmax-previous runs.
+**Seed replicates (submitted 2026-11-15 00:31):** the navhard 0.456 vs 0.441 comparison rests on one training each, so
+both runs are repeated with `++seed=1` (recipes otherwise identical; Hydra overrides diffed against the seed-0 runs):
+`rl3_b0.005_s1` (job 15065648, 8 CPUs / 32000M / 4 h) and `rl3_ecshort4_b0.005_s1` (job 15065649, 7 h). Full official
+evaluation queued behind each (predict after the training via `exp/rl3_logs/predict_latest_run.sh`, which picks the
+run's date folder at start; scoring argmax / mixture / mixture_v1 / shortlist k 256, EC rule on argmax, short256 and
+mix10 bases, n 16 / 64): rl3_b0.005_s1 predict 15065650, jobs 15065651-70; rl3_ecshort4_b0.005_s1 predict 15065671,
+jobs 15065672-91. Log `exp/rl3_logs/rl3_seed_runs_2026-11-15.txt`; scratchpad `submit_seed_runs.sh`.
+Both trainings `COMPLETED` (2 h 26 min / 6 h 26 min; `Global Seed set to 1` on all ranks; run folders
+`rl3_b0.005_s1/2026.11.15.01.02.32`, `rl3_ecshort4_b0.005_s1/2026.11.15.01.02.34`). The first predict jobs failed in 2 s:
+each DDP rank creates its own date folder a second apart and the wrapper took the newest (rank ≠ 0, no checkpoints);
+fixed (it now takes the folder holding the checkpoint), the 40 stuck jobs cancelled and the chain resubmitted
+2026-11-15 11:02: predict 15081432 / 15081453, jobs 15081433-52 / 15081454-73.
+Validation (navtrain val, final step 1329), seed 0 → seed 1: rl3_b0.005 argmax 0.8548 → 0.8560, `shortlist_256` 0.8506
+→ 0.8490, KL 3.06 → 2.84; rl3_ecshort4 `argmax_no_ec` 0.8454 → 0.8454, `ec_argmax` 0.725 → 0.725, `shortlist_256`
+0.8108 → 0.8103, KL 3.48 → 3.53. On val the seed moves the final metrics by ≤ 0.002 (mid-training up to 0.016: rl3
+argmax at step 664 0.8440 vs 0.8285). Official results: PENDING.
+
+**Previous plan from the shortlist (submitted 2026-11-14).** At a shortlist evaluation the plan output at t − 0.5 s is
+the policy's best entry inside the scorer's top 256, not its argmax; on rl3_b0.005's saved predictions (control scorer,
+k 256) the two differ in 55.8% of navtest and 67.7% of navhard scenes (argmax outside the shortlist 45.7% / 64.8%; where
+they differ, endpoint distance median 1.40 m / 2.62 m). `rl_ec_previous_plan=shortlist` (config; default `argmax`)
+takes the previous plan as that pick: the policy's argmax over `rl_previous_shortlist[:256]`, the control scorer's
+top entries at t − 0.5 s by predicted total (not the evaluator's scores), ties in shortlist order as `select_trajectory`.
+- Scorer cache: `scripts/training/cache_scorer_shortlists.py` (control scorer p3_aux_ctrl best ep 2 on frames t,
+  t − 0.5, t − 1.0 s of every navtrain scene, past frames from the history cache; top 1024 per frame) →
+  `exp/scorer_shortlists/p3_aux_ctrl_ep02/` (6 shards, jobs 15048738-43, `MODE=shortlist` of
+  `run_rl_policy_head_slurm.sh`; smoke 15048720: 128 scenes, top-256 overlap with the p3_aux_policy heads at t 77%,
+  between t and t − 0.5 s 55%). Log `exp/rl3_logs/scorer_shortlists_2026-11-14.txt`.
+- RL cache: `cache_rl_reference.py --previous-shortlists` (training script `RL_PREVIOUS_SHORTLISTS=p3_aux_ctrl_ep02`)
+  adds `rl_previous_shortlist` (256 int16) per scene. `rl_shortlist` (the val monitor) stays the start model's heads,
+  so `shortlist_256` is comparable with rl3_b0.005 and the argmax EC runs.
+
+| Run | Job | rl_ec_weight | Previous plan |
+|---|---|---|---|
+| `rl3_ecshort2_b0.005` | 15049985 (after the scorer cache; `COMPLETED`) | 2 | policy's best in the control scorer's top 256 at t − 0.5 s |
+| `rl3_ecshort4_b0.005` | 15049986 (after the scorer cache; `COMPLETED`) | 4 | same |
+
+### Storage cleanup (2026-11-10)
+
+Per-epoch checkpoints of the 15 phase-1 runs from 2026-10-27 to 2026-11-02 (saved before checkpoints held only the
+trainable parameters, ~9 GB each) were deleted: 2.75 TB. Kept: every `checkpoints/best/` and the epoch files other runs
+start from (`p1c_ed05`, `p1d_scorelabels`, `p1d_total` `epochs/epoch-epoch=10.ckpt`). Per-epoch offline evaluations of
+those runs (checkpoint_evaluation.md) can no longer be re-run except for the kept epochs.

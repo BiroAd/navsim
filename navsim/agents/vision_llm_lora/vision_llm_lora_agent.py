@@ -14,8 +14,11 @@ from navsim.agents.vision_llm_lora.vision_llm_lora_aux import aux_output_channel
 from navsim.agents.vision_llm_lora.vision_llm_lora_features import (
     PDMScoreTargetBuilder,
     VisionLLMLoRAAuxTargetBuilder,
+    VisionLLMLoRAEgoHistoryBuilder,
     VisionLLMLoRAFeatureBuilder,
+    VisionLLMLoRAHistoryFrameBuilder,
     VisionLLMLoRATargetBuilder,
+    normalize_uint8_camera,
 )
 from navsim.agents.vision_llm_lora.vision_llm_lora_loss import (
     V1_MULTIPLICATIVE_PDM_SCORE_KEYS,
@@ -37,6 +40,8 @@ TRAJECTORY_SELECTIONS = (
     "shortlist_v1",
     "mixture",
     "mixture_v1",
+    "local",
+    "local_v1",
 )
 
 
@@ -46,6 +51,8 @@ def select_trajectory(
     codebook: torch.Tensor,
     shortlist_size: int = 64,
     mixture_lambda: float = 10.0,
+    local_size: int = 64,
+    local_lambda: float = 0.1,
 ) -> torch.Tensor:
     """
     Output trajectory per config.trajectory_selection.
@@ -53,8 +60,12 @@ def select_trajectory(
         (B, M, K) and, for "shortlist*" / "mixture*", the policy's "trajectory_logits" (B, K)
     :param selection: "argmax" (the model's own output); "score_heads" (entry with the best predicted total, v2 formula
         without two-frame comfort); "shortlist" (the policy's most likely entry among the shortlist_size entries with
-        the best predicted total); "mixture" (argmax of log p + mixture_lambda * log predicted total); the "_v1" variants
-        use the NAVSIM v1 PDMS formula for the predicted total
+        the best predicted total); "mixture" (argmax of log p + mixture_lambda * log predicted total); "local" (a
+        discrete version of test-time search around the policy's choice, after TOAD, arXiv 2606.07170: among the
+        local_size codebook entries nearest to the policy's most likely entry by ADE over (x, y), itself included, the
+        one with the best predicted total - local_lambda * ADE in metres; the anchor term keeps the policy's entry
+        unless a neighbour's predicted gain exceeds local_lambda per metre of displacement); the "_v1" variants use the
+        NAVSIM v1 PDMS formula for the predicted total
     :param codebook: (K, 8, 3) codebook trajectories
     :return: (B, 8, 3)
     """
@@ -74,6 +85,13 @@ def select_trajectory(
     if selection.startswith("shortlist"):
         short = total.topk(min(shortlist_size, total.shape[-1]), dim=-1).indices  # (B, k)
         best = short.gather(1, log_p.gather(1, short).argmax(dim=-1, keepdim=True))[:, 0]
+    elif selection.startswith("local"):
+        xy = codebook[..., :2].float().to(total.device)  # (K, 8, 2)
+        anchor = xy[log_p.argmax(dim=-1)]  # (B, 8, 2)
+        ade = (xy[None] - anchor[:, None]).norm(dim=-1).mean(dim=-1)  # (B, K), 0 at the anchor
+        near = ade.topk(min(local_size, ade.shape[-1]), dim=-1, largest=False).indices  # (B, n), anchor included
+        objective = total.gather(1, near) - local_lambda * ade.gather(1, near)
+        best = near.gather(1, objective.argmax(dim=-1, keepdim=True))[:, 0]
     else:  # mixture
         best = (log_p + mixture_lambda * total.clamp_min(1e-6).log()).argmax(dim=-1)
     return codebook[best]
@@ -148,6 +166,8 @@ class VisionLLMLoRAAgent(AbstractAgent):
             "_vlm_model.acceleration_encoder.",
             "_vlm_model.direction_embedding.",
             "_vlm_model.ego_state_tokens.",
+            "_vlm_model.ego_history_tokens.",
+            "_vlm_model.ego_history_missing",
             "_vlm_model.planner_queries",
             "_vlm_model.query_pos_embed",
             "_vlm_model.aux_decoder.",
@@ -174,7 +194,9 @@ class VisionLLMLoRAAgent(AbstractAgent):
         # rank's GPU, so .cuda() would put every rank's copy on cuda:0. compute_trajectory moves the model for eval.
 
     def get_sensor_config(self) -> SensorConfig:
-        history_steps = [3]
+        history_steps = [3]  # the current frame; temporal_history_frame k also loads frame 3 - k
+        if self._config.temporal_history_frame:
+            history_steps = [3 - self._config.temporal_history_frame, 3]
         # The panorama layout uses the side cameras L1/R1 instead of the rear-side L2/R2.
         panorama = self._config.camera_layout == "panorama"
         return SensorConfig(
@@ -216,7 +238,23 @@ class VisionLLMLoRAAgent(AbstractAgent):
         return builders
 
     def get_feature_builders(self) -> List[AbstractFeatureBuilder]:
-        return [VisionLLMLoRAFeatureBuilder(config=self._config)]
+        builders = [VisionLLMLoRAFeatureBuilder(config=self._config)]
+        root = self._config.history_cache_path
+        if self._config.temporal_history_frame:
+            builders.append(VisionLLMLoRAHistoryFrameBuilder(self._config, self._config.temporal_history_frame, root))
+        if self._config.ego_history_tokens:
+            builders.append(VisionLLMLoRAEgoHistoryBuilder(root))
+        if self._ec_in_reward():
+            # Training only (read from the history cache): the previous frame's camera tiles and ego status, for the
+            # previous plan of the EC reward (compute_loss). Not added at evaluation (history_cache_path unset there).
+            if self._config.temporal_history_frame or self._config.ego_history_tokens:
+                raise ValueError("rl_ec_weight > 0 is not supported with temporal_history_frame / ego_history_tokens")
+            builders.append(VisionLLMLoRAHistoryFrameBuilder(self._config, 1, root))
+            builders.append(VisionLLMLoRAEgoHistoryBuilder(root))
+        return builders
+
+    def _ec_in_reward(self) -> bool:
+        return self._config.rl_loss_weight > 0 and self._config.rl_ec_weight > 0 and bool(self._config.history_cache_path)
 
     def forward(
         self,
@@ -232,7 +270,77 @@ class VisionLLMLoRAAgent(AbstractAgent):
         targets: Dict[str, torch.Tensor],
         predictions: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
+        if self._ec_in_reward():
+            previous_shortlist = None
+            if self._config.rl_ec_previous_plan == "shortlist":
+                previous_shortlist = targets["rl_previous_shortlist"][:, : self._config.rl_ec_previous_shortlist_size]
+            elif self._config.rl_ec_previous_plan != "argmax":
+                raise ValueError(f"rl_ec_previous_plan must be argmax or shortlist, got {self._config.rl_ec_previous_plan}")
+            ec = self._ec_against_previous_plan(features, targets["rl_multiplier"] > 0, previous_shortlist)
+            predictions = dict(predictions, rl_ec=ec)
         return vision_llm_lora_loss(targets, predictions, self._config)
+
+    @torch.no_grad()
+    def _ec_against_previous_plan(
+        self,
+        features: Dict[str, torch.Tensor],
+        needed: Optional[torch.Tensor] = None,
+        previous_shortlist: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        EC (B, K) of every codebook entry at t against the current model's plan at t - 0.5 s: a forward pass on the
+        previous frame's camera tiles, velocity, acceleration and driving command in eval mode (no dropout, the
+        deterministic output an agent would have produced there), then ec_torch on the GPU. The plan is the argmax, or
+        with previous_shortlist (B, k) (the scorer's shortlist at t - 0.5 s, best first) the most likely entry among it,
+        as the "shortlist" selection picks it. needed (B, K) bool: simulate only these entries (those with M > 0: EC
+        does not change the reward of the others, ~72% of all), 0 elsewhere.
+        """
+        from navsim.agents.vision_llm_lora.ec_torch import TorchExtendedComfort
+
+        model = self._vlm_model
+        previous = dict(features)
+        previous["camera_feature"] = normalize_uint8_camera(
+            features["camera_history_t1"], self._config.image_normalization
+        ).to(features["camera_feature"].dtype)
+        previous["velocity"] = features["ego_history_velocity"][:, 0]
+        previous["acceleration"] = features["ego_history_acceleration"][:, 0]
+        previous["driving_command"] = features["ego_history_command"][:, 0]
+        was_training = model.training
+        model.eval()
+        try:
+            previous_logits = model(previous, None, 1.0)["trajectory_logits"]
+        finally:
+            model.train(was_training)
+        device = previous_logits.device
+        if previous_shortlist is None:
+            previous_entry = previous_logits.float().argmax(-1)
+        else:  # as select_trajectory "shortlist": argmax of the policy over the shortlist, ties in shortlist order
+            short = previous_shortlist.to(device).long()
+            previous_entry = short.gather(1, previous_logits.float().gather(1, short).argmax(-1, keepdim=True))[:, 0]
+        if getattr(self, "_ec", None) is None or self._ec.device != device:
+            import numpy as np
+
+            tracking = dict(np.load(self._config.rl_ec_tracking_path))
+            self._ec = TorchExtendedComfort(tracking, device)
+        entries = None
+        if needed is not None:
+            needed = needed.to(device)
+            count = int(needed.sum(-1).max().clamp_min(1))
+            # per scene the needed entries first (stable: index order), padded with unneeded ones up to the batch max
+            entries = torch.sort(needed.to(torch.int8), dim=-1, descending=True, stable=True).indices[:, :count]
+        ec = self._ec.against_previous(
+            features["velocity"].to(device),
+            features["acceleration"].to(device),
+            features["ego_history_velocity"][:, 0].to(device),
+            features["ego_history_acceleration"][:, 0].to(device),
+            previous_entry,
+            entries=entries,
+        )
+        if entries is None:
+            return ec.float()
+        full = torch.zeros(needed.shape, dtype=torch.float32, device=device)
+        full.scatter_(1, entries, ec.float())
+        return full * needed
 
     def get_optimizers(self) -> Union[Optimizer, Dict[str, Union[Optimizer, LRScheduler]]]:
         total_steps = self._config.total_training_steps * self._config.num_epochs
@@ -263,7 +371,7 @@ class VisionLLMLoRAAgent(AbstractAgent):
             ):
                 traj_named.append((name, param))
 
-            elif "ego_state_tokens.norm" in name:
+            elif "ego_state_tokens.norm" in name or "ego_history_tokens.norm" in name:
                 ego_gain_named.append((name, param))
 
             elif "aux_decoder" in name:
@@ -275,6 +383,8 @@ class VisionLLMLoRAAgent(AbstractAgent):
                 or "direction_embedding" in name
                 or "ego_fusion_mlp" in name
                 or "ego_state_tokens" in name
+                or "ego_history_tokens" in name
+                or "ego_history_missing" in name
             ):
                 ego_named.append((name, param))
 
@@ -449,6 +559,8 @@ class VisionLLMLoRAAgent(AbstractAgent):
                 self._vlm_model.codebook,
                 shortlist_size=self._config.selection_shortlist_size,
                 mixture_lambda=self._config.selection_mixture_lambda,
+                local_size=self._config.selection_local_size,
+                local_lambda=self._config.selection_local_lambda,
             )
             poses = trajectory.squeeze(0).float().cpu().numpy()
 

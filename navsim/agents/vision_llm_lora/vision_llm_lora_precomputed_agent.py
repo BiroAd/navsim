@@ -64,6 +64,8 @@ class VisionLLMLoRAPrecomputedAgent(AbstractAgent):
         selection_shortlist_size: int = 64,
         selection_mixture_lambda: float = 10.0,
         scores_path: Optional[str] = None,
+        selection_local_size: int = 64,
+        selection_local_lambda: float = 0.1,
     ):
         super().__init__(trajectory_sampling, requires_scene=True)
         if trajectory_selection not in TRAJECTORY_SELECTIONS:
@@ -72,6 +74,8 @@ class VisionLLMLoRAPrecomputedAgent(AbstractAgent):
         self._selection = trajectory_selection
         self._shortlist_size = selection_shortlist_size
         self._mixture_lambda = selection_mixture_lambda
+        self._local_size = selection_local_size
+        self._local_lambda = selection_local_lambda
         self._scores_path = Path(scores_path) if scores_path else None
         self._predictions: Optional[Dict[str, object]] = None
         self._scores: Optional[Dict[str, object]] = None
@@ -111,5 +115,7 @@ class VisionLLMLoRAPrecomputedAgent(AbstractAgent):
             self._predictions["codebook"],
             shortlist_size=self._shortlist_size,
             mixture_lambda=self._mixture_lambda,
+            local_size=self._local_size,
+            local_lambda=self._local_lambda,
         )
         return Trajectory(trajectory.squeeze(0).float().numpy(), self._trajectory_sampling)

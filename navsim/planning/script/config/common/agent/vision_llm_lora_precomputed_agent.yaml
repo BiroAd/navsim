@@ -12,3 +12,5 @@ trajectory_selection: argmax
 selection_shortlist_size: 64
 selection_mixture_lambda: 10.0
 scores_path: null  # optional: take pdm_score_logits from this prediction folder (RL-3: the start model's)
+selection_local_size: 64  # "local*": codebook neighbours of the policy's entry searched
+selection_local_lambda: 0.1  # "local*": anchor weight per metre of ADE

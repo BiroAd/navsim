@@ -50,6 +50,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--max-scenes", type=int, default=None, help="per split (smoke test)")
+    parser.add_argument("--history-cache-path", default=None,
+                        help="past-frame cache (one or more squashfs mounts joined by os.pathsep) for runs with "
+                             "temporal_history_frame / ego_history_tokens; the run config holds its training job's "
+                             "temporary mounts")
     return parser.parse_args()
 
 
@@ -58,6 +62,11 @@ def main() -> None:
     args = parse_args()
     cfg = OmegaConf.load(args.run_dir / "code" / "hydra" / "config.yaml")
     checkpoint = args.checkpoint if args.checkpoint.is_absolute() else args.run_dir / args.checkpoint
+    model_cfg = cfg.agent.config
+    if model_cfg.get("temporal_history_frame", 0) or model_cfg.get("ego_history_tokens", False):
+        if args.history_cache_path is None:
+            raise SystemExit("this run reads past frames: give --history-cache-path (HISTORY_CACHE=1 in the SLURM script)")
+        model_cfg.history_cache_path = args.history_cache_path
     agent = evaluation.build_agent(cfg)
     checkpoints = [*evaluation.base_checkpoints(cfg), checkpoint]
     evaluation.load_trainable(agent, checkpoints)

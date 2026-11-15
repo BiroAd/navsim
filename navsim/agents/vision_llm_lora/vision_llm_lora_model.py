@@ -32,6 +32,7 @@ Codebook file  (see codebook/build_codebook.py for the offline step)
 
 from __future__ import annotations
 
+import contextlib
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -56,7 +57,7 @@ except ImportError:
 from navsim.agents.vision_llm_lora.vision_llm_lora_aux import AuxBEVDecoder, aux_output_channels
 from navsim.agents.vision_llm_lora.vision_llm_lora_codebook import load_codebook
 from navsim.agents.vision_llm_lora.vision_llm_lora_config import VisionLLMLoRAConfig
-from navsim.agents.vision_llm_lora.vision_llm_lora_features import PDM_SCORE_KEYS
+from navsim.agents.vision_llm_lora.vision_llm_lora_features import PDM_SCORE_KEYS, normalize_uint8_camera
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -350,6 +351,16 @@ class EgoFusionMLP(nn.Module):
 # Ego-state tokens
 
 
+def ego_history_inputs(pose: torch.Tensor, use_yaw: bool) -> torch.Tensor:
+    """(B, 3, 3) past poses (x, y, yaw; current ego frame) -> the history tokens' inputs: (x, y, yaw wrapped to
+    (-pi, pi]) with use_yaw, else (x, y)."""
+    pose = pose.float()
+    if not use_yaw:
+        return pose[..., :2]
+    yaw = torch.atan2(torch.sin(pose[..., 2:]), torch.cos(pose[..., 2:]))
+    return torch.cat([pose[..., :2], yaw], dim=-1)
+
+
 class EgoStateTokens(nn.Module):
     """
     One LLM input token per (x, y) ego quantity (velocity, acceleration).
@@ -363,19 +374,30 @@ class EgoStateTokens(nn.Module):
     def __init__(
         self,
         hidden_size: int,
-        scales: Sequence[float],
+        scales: Sequence,
         n_frequencies: int,
         embed_rms: float,
         mlp_dim: int = 256,
+        n_components: int = 2,
     ):
+        """
+        :param scales: one scale per quantity (Q,), applied to all its components, or per component (Q, n_components)
+            (e.g. the history tokens' (x, y, yaw) with metres for x, y and radians for yaw)
+        :param n_components: values per quantity (2: x, y; 3: x, y, yaw)
+        """
         super().__init__()
 
-        self.register_buffer("scales", torch.tensor(scales, dtype=torch.float32), persistent=False)
+        scales = torch.tensor(scales, dtype=torch.float32)
+        if scales.dim() == 1:
+            scales = scales[:, None].expand(-1, n_components)
+        if scales.shape[1] != n_components:
+            raise ValueError(f"scales {tuple(scales.shape)} do not match n_components={n_components}")
+        self.register_buffer("scales", scales.contiguous(), persistent=False)  # (Q, n_components)
         self.register_buffer(
             "freqs", torch.pi * 2.0 ** torch.arange(n_frequencies, dtype=torch.float32), persistent=False
         )
 
-        in_dim = 2 * (1 + 2 * n_frequencies)  # (x, y) × [value, sin, cos]
+        in_dim = n_components * (1 + 2 * n_frequencies)  # components × [value, sin, cos]
 
         self.mlps = nn.ModuleList([
             nn.Sequential(
@@ -391,10 +413,10 @@ class EgoStateTokens(nn.Module):
 
     def forward(self, states: torch.Tensor) -> torch.Tensor:
         """
-        :param states: (B, Q, 2) raw ego quantities in ego frame, Q = len(scales)
+        :param states: (B, Q, n_components) raw ego quantities in ego frame, Q = len(scales)
         :return: (B, Q, hidden_size) token embeddings
         """
-        x = states.float() / self.scales[:, None]
+        x = states.float() / self.scales
         angles = x[..., None] * self.freqs                                     # (B, Q, 2, F)
         feats = torch.cat([x, angles.sin().flatten(-2), angles.cos().flatten(-2)], dim=-1)
 
@@ -525,6 +547,21 @@ class VisionLLMLoRAModel(nn.Module):
                 n_frequencies=config.ego_fourier_frequencies,
                 embed_rms=embed_rms,
             )
+        # Past (x, y) positions at t-0.5 / t-1.0 / t-1.5 s as 3 more ego tokens (config.ego_history_tokens), with
+        # learned "missing" embeddings that replace them in training with probability config.ego_history_dropout.
+        if config.ego_history_tokens:
+            if not config.ego_state_tokens:
+                raise ValueError("ego_history_tokens needs ego_state_tokens (it reuses the <EGO_STATE> placeholder).")
+            yaw = config.ego_history_yaw_scale > 0
+            self.ego_history_tokens = EgoStateTokens(
+                hidden_size=llm_hidden,
+                scales=[(s, s, config.ego_history_yaw_scale) if yaw else (s, s)
+                        for s in config.ego_history_position_scales],
+                n_frequencies=config.ego_fourier_frequencies,
+                embed_rms=embed_rms,
+                n_components=3 if yaw else 2,
+            )
+            self.ego_history_missing = nn.Parameter(torch.randn(len(config.ego_history_position_scales), llm_hidden) * embed_rms)
 
         # ── 9. Prompt template ────────────────────────────────────────────────
         # Uses Qwen3.5's ChatML template structure. <EGO> is empty unless
@@ -876,6 +913,8 @@ class VisionLLMLoRAModel(nn.Module):
         ego_str = ""
         if self.config.ego_state_tokens:
             ego_str += f"Current velocity:{_EGO_STATE_TOKEN}, acceleration:{_EGO_STATE_TOKEN}.\n"
+        if getattr(self.config, "ego_history_tokens", False):
+            ego_str += f"Past positions:{_EGO_STATE_TOKEN * len(self.config.ego_history_position_scales)}.\n"
         if command is not None:
             ego_str += f"Navigation command: {_COMMAND_TEXT[command]}.\n"
 
@@ -896,9 +935,11 @@ class VisionLLMLoRAModel(nn.Module):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _preprocess_images(
-        self, images: torch.Tensor
+        self, images: torch.Tensor, previous: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, Tuple[int, ...]]:
         """
+        previous: optional (B, P, C, H, W) images of an earlier frame, arranged exactly like images; they fill the
+        second temporal slot of every patch (config.temporal_history_frame, _patchify).
         Convert a batch of multi-camera images into the flat-patch format that
         Qwen3_5VisionModel.forward() expects.
 
@@ -927,24 +968,29 @@ class VisionLLMLoRAModel(nn.Module):
                                (96, 96, 16) for strips + zoom at 128 px tiles
         """
         B, P, C, H, W = images.shape
+        if previous is not None and previous.shape != images.shape:
+            raise ValueError(f"previous frame {tuple(previous.shape)} does not match images {tuple(images.shape)}")
 
-        if self.config.image_layout == "strips":
-            if P < 12:
-                raise ValueError(f"image_layout='strips' needs the 12 canvas tiles, got {P} images.")
-            # (B, 12, C, H, W) → (B, 2 rows, 6, C, H, W) → (B, 2, C, H, 6 * W)
-            rows = images[:, :12].reshape(B, 2, 6, C, H, W).permute(0, 1, 3, 4, 2, 5).reshape(B, 2, C, H, 6 * W)
-            groups = [rows] + ([images[:, 12:]] if P > 12 else [])
-        elif self.config.image_layout == "tiles":
-            groups = [images]
-        else:
+        def arrange(x: torch.Tensor) -> List[torch.Tensor]:
+            if self.config.image_layout == "strips":
+                if P < 12:
+                    raise ValueError(f"image_layout='strips' needs the 12 canvas tiles, got {P} images.")
+                # (B, 12, C, H, W) → (B, 2 rows, 6, C, H, W) → (B, 2, C, H, 6 * W)
+                rows = x[:, :12].reshape(B, 2, 6, C, H, W).permute(0, 1, 3, 4, 2, 5).reshape(B, 2, C, H, 6 * W)
+                return [rows] + ([x[:, 12:]] if P > 12 else [])
+            if self.config.image_layout == "tiles":
+                return [x]
             raise ValueError(f"Unknown image_layout: {self.config.image_layout!r}")
+
+        groups = arrange(images)
+        previous_groups = arrange(previous) if previous is not None else [None] * len(groups)
 
         # Patchify each group of same-sized images; keep every sample's
         # images together, in order, as the vision tower output is split per
         # sample afterwards.
         pixel_values, grids = [], []
-        for group in groups:
-            patches, grid_h, grid_w = self._patchify(group)
+        for group, previous_group in zip(groups, previous_groups):
+            patches, grid_h, grid_w = self._patchify(group, previous_group)
             pixel_values.append(patches)
             grids += [[1, grid_h, grid_w]] * group.shape[1]
 
@@ -961,14 +1007,17 @@ class VisionLLMLoRAModel(nn.Module):
         return pixel_values, grid_thw, tokens_per_image
 
     def _patchify(
-        self, images: torch.Tensor
+        self, images: torch.Tensor, previous: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, int, int]:
         """
         (B, M, C, H, W) same-sized images → (B, M * grid_h * grid_w, patch_dim)
         patches, sample-major, plus the patch grid (grid_h, grid_w).
 
         For a still image we duplicate it along the temporal axis to satisfy
-        the Conv3d temporal kernel size of 2, giving t=1 temporal patch.
+        the Conv3d temporal kernel size of 2, giving t=1 temporal patch. With
+        previous (same shape: the same images of an earlier frame,
+        config.temporal_history_frame) the two temporal slots hold (previous,
+        current), the order of video frames; still t=1, same token count.
         """
         B, M, C, H, W = images.shape
         ps = self._patch_size     # 16
@@ -983,7 +1032,8 @@ class VisionLLMLoRAModel(nn.Module):
 
         # Flatten B and M into a single image-sequence axis
         imgs_flat = images.reshape(N, C, H, W)   # (N, C, H, W)
- 
+        prev_flat = None if previous is None else previous.reshape(N, C, H, W)
+
         # ── Pad to even patch grid ───────────────────────────────────────────
         # Qwen3.5's merger does a 2×2 spatial merge (merge_size=2), so it calls
         # .view(t, h//2, 2, w//2, 2, -1).  Both grid_h and grid_w must therefore
@@ -995,6 +1045,8 @@ class VisionLLMLoRAModel(nn.Module):
         if pad_h > 0 or pad_w > 0:
             # Pad right / bottom only so the top-left pixel origin is unchanged.
             imgs_flat = F.pad(imgs_flat, (0, pad_w, 0, pad_h))
+            if prev_flat is not None:
+                prev_flat = F.pad(prev_flat, (0, pad_w, 0, pad_h))
             H = H + pad_h
             W = W + pad_w
  
@@ -1003,7 +1055,12 @@ class VisionLLMLoRAModel(nn.Module):
  
         # Duplicate along temporal axis: (N, C, H, W) → (N, C, ts, H, W)
         # .contiguous() required before .view() because .expand() is lazy/non-contiguous.
-        imgs_t = imgs_flat.unsqueeze(2).expand(-1, -1, ts, -1, -1).contiguous()
+        if prev_flat is None:
+            imgs_t = imgs_flat.unsqueeze(2).expand(-1, -1, ts, -1, -1).contiguous()
+        else:
+            if ts != 2:
+                raise ValueError(f"previous frame needs temporal_patch_size 2, got {ts}")
+            imgs_t = torch.stack([prev_flat, imgs_flat], dim=2)  # (N, C, 2, H, W): earlier, current
  
         # Rearrange into non-overlapping spatio-temporal patches then flatten. Each patch is laid out as
         # (C, ts, ps, ps) in both orders.
@@ -1037,11 +1094,18 @@ class VisionLLMLoRAModel(nn.Module):
         # ============================================================
 
         images = features["camera_feature"].to(dev)
+        previous = None
+        if self.config.temporal_history_frame:
+            # uint8 tiles of the earlier frame, normalized like camera_feature (VisionLLMLoRAFeatureBuilder)
+            previous = normalize_uint8_camera(
+                features[f"camera_history_t{self.config.temporal_history_frame}"].to(dev),
+                self.config.image_normalization,
+            ).to(images.dtype)
 
         B = images.shape[0]
 
         pixel_values, grid_thw, tokens_per_image = (
-            self._preprocess_images(images)
+            self._preprocess_images(images, previous)
         )
         n_images = len(tokens_per_image)
 
@@ -1097,6 +1161,14 @@ class VisionLLMLoRAModel(nn.Module):
             ego_tokens = self.ego_state_tokens(
                 torch.stack([velocity, acceleration], dim=1)
             ).to(dtype)   # (B, 2, D)
+        if self.config.ego_history_tokens:
+            pose = ego_history_inputs(features["ego_history_pose"].to(dev), self.config.ego_history_yaw_scale > 0)
+            history = self.ego_history_tokens(pose)  # (B, 3, D)
+            if self.training and self.config.ego_history_dropout > 0:
+                drop = torch.rand(history.shape[0], 1, 1, device=history.device) < self.config.ego_history_dropout
+                history = torch.where(drop, self.ego_history_missing.to(history.dtype)[None], history)
+            # after velocity / acceleration: the prompt order of the <EGO_STATE> placeholders (masked_scatter)
+            ego_tokens = torch.cat([ego_tokens, history.to(dtype)], dim=1)   # (B, 5, D)
 
         # ============================================================
         # PROMPT
@@ -1263,21 +1335,27 @@ class VisionLLMLoRAModel(nn.Module):
         teacher_forcing_ratio=1.0,
     ):
 
-        (
-            prompt_embeds,
-            prompt_mask,
-            ego_repr,
-            position_ids,
-            img_pos,
-        ) = self._encode_inputs(features)
+        # Policy-only training: nothing before the head trains, so the backbone runs without autograd. Removing the
+        # input-grad hooks is not enough: transformers keeps only the last enable_input_require_grads() call's hooks
+        # (gradient_checkpointing_enable() registered one before), so one stayed and the LLM kept all activations
+        # (~40 GB at batch 8; same values, only memory and time). Same forward values either way.
+        backbone_ctx = torch.no_grad if self.config.train_policy_head_only else contextlib.nullcontext
+        with backbone_ctx():
+            (
+                prompt_embeds,
+                prompt_mask,
+                ego_repr,
+                position_ids,
+                img_pos,
+            ) = self._encode_inputs(features)
 
-        outputs = self.model.language_model(
-            inputs_embeds=prompt_embeds,
-            attention_mask=prompt_mask,
-            position_ids=position_ids,
-            return_dict=True,
-            use_cache=False,
-        )
+            outputs = self.model.language_model(
+                inputs_embeds=prompt_embeds,
+                attention_mask=prompt_mask,
+                position_ids=position_ids,
+                return_dict=True,
+                use_cache=False,
+            )
 
         traj_logits, sim, query_variance, relative_variance, fused = self.traj_classifier(
             outputs,

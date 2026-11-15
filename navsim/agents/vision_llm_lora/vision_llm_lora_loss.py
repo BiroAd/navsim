@@ -38,6 +38,65 @@ BINARY_PDM_SCORE_KEYS = (
 
 # Cache codebook globally to avoid reloading it on every batch
 _GLOBAL_CODEBOOK = None
+# Nearest codebook neighbours per entry for the pairwise score loss, keyed by (device, number of neighbours)
+_NEIGHBOUR_TABLES: Dict[Tuple[str, int], torch.Tensor] = {}
+
+
+def codebook_neighbours(codebook: torch.Tensor, n: int, chunk: int = 1024) -> torch.Tensor:
+    """(K, n) indices of each entry's n nearest other entries by ADE over (x, y); computed once per device."""
+    key = (str(codebook.device), n)
+    if key not in _NEIGHBOUR_TABLES:
+        xy = codebook[..., :2].float()
+        rows = []
+        for start in range(0, len(xy), chunk):
+            ade = (xy[start : start + chunk, None] - xy[None]).norm(dim=-1).mean(dim=-1)  # (c, K)
+            ade[torch.arange(ade.shape[0]), torch.arange(start, start + ade.shape[0])] = float("inf")
+            rows.append(ade.topk(n, dim=-1, largest=False).indices)
+        _NEIGHBOUR_TABLES[key] = torch.cat(rows)
+    return _NEIGHBOUR_TABLES[key]
+
+
+def pairwise_score_loss(
+    score_logits: torch.Tensor,
+    score_targets: torch.Tensor,
+    entry_ade: torch.Tensor,
+    codebook: torch.Tensor,
+    keys: Tuple[str, ...],
+    anchors: int,
+    neighbours: int,
+    margin: float,
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """
+    Ranking loss between near-identical candidates (config.pairwise_score_loss_weight).
+    :param score_logits: (B, M, K) sub-score logits; score_targets: (B, M, K) targets in [0, 1]
+    :param entry_ade: (B, K) ADE of every codebook entry to the ground-truth trajectory (selects the anchors)
+    :return: mean softplus(margin - (s_better - s_worse)) over the pairs whose targets differ by >= 0.5 (0 if none), and
+        detached metrics pdm_scores/pair_acc (correctly ordered share), pair_acc_<key>, pairs_per_scene
+    """
+    table = codebook_neighbours(codebook, neighbours)  # (K, n)
+    anchor = entry_ade.topk(min(anchors, entry_ade.shape[-1]), dim=-1, largest=False).indices  # (B, A)
+    other = table[anchor]  # (B, A, n)
+    heads = [PDM_SCORE_KEYS.index(key) for key in keys]
+    losses, correct, counts, extra = [], [], [], {}
+    for key, m in zip(keys, heads):
+        s, t = score_logits[:, m], score_targets[:, m]  # (B, K)
+        s_i, t_i = s.gather(1, anchor)[..., None], t.gather(1, anchor)[..., None]  # (B, A, 1)
+        flat = other.flatten(1)
+        s_j, t_j = s.gather(1, flat).view_as(other), t.gather(1, flat).view_as(other)  # (B, A, n)
+        sign = torch.sign(t_i - t_j)
+        valid = (t_i - t_j).abs() >= 0.5
+        gap = sign * (s_i - s_j)  # > 0 when the better candidate has the higher logit
+        losses.append(F.softplus(margin - gap)[valid])
+        right = (gap > 0)[valid]
+        correct.append(right)
+        counts.append(valid.sum())
+        extra[f"pdm_scores/pair_acc_{key}"] = right.float().mean().detach() if right.numel() else gap.new_tensor(float("nan"))
+    pair_losses = torch.cat(losses)
+    loss = pair_losses.mean() if pair_losses.numel() else score_logits.sum() * 0.0
+    all_right = torch.cat(correct)
+    extra["pdm_scores/pair_acc"] = all_right.float().mean().detach() if all_right.numel() else loss.new_tensor(float("nan"))
+    extra["pdm_scores/pairs_per_scene"] = (torch.stack(counts).sum() / score_logits.shape[0]).float().detach()
+    return loss, extra
 _GLOBAL_CODEBOOK_DEVICE = None
 
 def _get_codebook(config: VisionLLMLoRAConfig, device: torch.device) -> torch.Tensor:
@@ -195,6 +254,14 @@ def vision_llm_lora_loss(
         if config.pdm_total_score_loss_weight > 0:
             loss = loss + config.pdm_total_score_loss_weight * total_bce
         extra["loss_terms/score_total_bce"] = total_bce.detach()
+        if config.pairwise_score_loss_weight > 0:
+            pair_loss, pair_extra = pairwise_score_loss(
+                score_logits, score_targets, entry_ade.detach(), cb, tuple(config.pairwise_score_keys),
+                config.pairwise_score_anchors, config.pairwise_score_neighbours, config.pairwise_score_margin,
+            )
+            loss = loss + config.pairwise_score_loss_weight * pair_loss
+            extra["loss_terms/score_pairwise"] = pair_loss.detach()
+            extra.update(pair_extra)
         extra["pdm_scores/total_mae"] = (total_pred - total_target).abs().mean().detach()
         # Proxy score of the entry the heads rank best (selection by the predicted total); the gap 1 - score is the
         # monitor (mode "min") for runs judged by head selection, e.g. phase 3 with score losses only.
@@ -231,7 +298,10 @@ def vision_llm_lora_loss(
 
     # ── Optional RL on the policy logits (RL-3; vision_llm_lora_rl.rl_loss_terms) ──
     if config.rl_loss_weight > 0:
-        rl_loss, rl_extra = rl_loss_terms(token_logits, targets, config.rl_beta, config.rl_reference_head_path)
+        rl_loss, rl_extra = rl_loss_terms(
+            token_logits, targets, config.rl_beta, config.rl_reference_head_path,
+            ec=predictions.get("rl_ec"), ec_weight=config.rl_ec_weight,
+        )
         loss = loss + config.rl_loss_weight * rl_loss
         extra["loss_terms/rl"] = rl_loss.detach()
         extra.update(rl_extra)

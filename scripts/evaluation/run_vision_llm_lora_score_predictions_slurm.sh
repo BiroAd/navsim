@@ -15,8 +15,10 @@
 # PRED          prediction folder under $NAVSIM_EXP_ROOT/predictions/ (holds <split>/)
 # SCORES_PRED   optional: prediction folder whose sub-score logits replace PRED's (RL-3: the start model,
 #               e.g. p3_aux_policy_ep03; the RL model's own heads are not trained)
-# SELECTION     argmax | score_heads | score_heads_v1 | shortlist | shortlist_v1 | mixture | mixture_v1
+# SELECTION     argmax | score_heads | score_heads_v1 | shortlist | shortlist_v1 | mixture | mixture_v1 | local | local_v1
 # K / LAMBDA    shortlist size (default 64) / mixture lambda (default 10)
+# LOCAL_N / LOCAL_LAMBDA  local search: codebook neighbours of the policy's entry (default 64) / anchor weight per
+#               metre of ADE (default 0.1)
 # SPLIT         navtest (default) | navhard_two_stage
 # TRAFFIC       navtest only: non_reactive (default) | reactive
 # HUMAN_FILTER  true (official; default) | false
@@ -33,6 +35,8 @@
 #   13 CPUs), so keep --mem <= 2000M x CPUs. Memory shows ~100% used at any limit (file cache), no job was killed.
 #   Default 4 CPUs / 8000M; navhard also 4 CPUs (submit_vision_llm_lora_eval.sh: 45 min limit; about twice the
 #   scoring work: 12 min on 32 CPUs at 36%).
+#   navtest TRAFFIC=reactive is ~7x slower than non_reactive (IDM simulation of the other agents at every step):
+#   ~92 scenes/min on 4 CPUs at 94% (job 14947203 timed out at 1:30 with 6781/12146 scenes) -> --time=02:40:00.
 # Extra arguments go to Hydra.
 set -euo pipefail
 : "${NAVSIM_DEVKIT_ROOT:?}" "${OPENSCENE_DATA_ROOT:?}" "${NUPLAN_MAPS_ROOT:?}" "${NAVSIM_EXP_ROOT:?}" "${PRED:?}" "${SELECTION:?}"
@@ -40,6 +44,8 @@ set -euo pipefail
 SPLIT=${SPLIT:-navtest}
 K=${K:-64}
 LAMBDA=${LAMBDA:-10.0}
+LOCAL_N=${LOCAL_N:-64}
+LOCAL_LAMBDA=${LOCAL_LAMBDA:-0.1}
 HUMAN_FILTER=${HUMAN_FILTER:-true}
 WORKERS=${WORKERS:-${SLURM_CPUS_PER_TASK:-8}}
 case $SPLIT in
@@ -54,6 +60,7 @@ esac
 case $SELECTION in
     shortlist*) LABEL=${SELECTION}_k$K ;;
     mixture*) LABEL=${SELECTION}_lam${LAMBDA%.0} ;;
+    local*) LABEL=${SELECTION}_n${LOCAL_N}_lam${LOCAL_LAMBDA} ;;
     *) LABEL=$SELECTION ;;
 esac
 PRED_DIR=$NAVSIM_EXP_ROOT/predictions/$PRED/$SPLIT
@@ -81,6 +88,8 @@ python $NAVSIM_DEVKIT_ROOT/scripts/evaluation/run_pdm_score_balanced.py $SCRIPT 
     agent.trajectory_selection=$SELECTION \
     agent.selection_shortlist_size=$K \
     agent.selection_mixture_lambda=$LAMBDA \
+    agent.selection_local_size=$LOCAL_N \
+    agent.selection_local_lambda=$LOCAL_LAMBDA \
     "${SCORES_ARGS[@]}" \
     scorer.config.human_penalty_filter=$HUMAN_FILTER \
     experiment_name=$OUT \

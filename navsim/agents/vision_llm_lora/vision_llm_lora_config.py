@@ -71,6 +71,23 @@ class VisionLLMLoRAConfig:
     # the quantity used to select a trajectory by the heads. Needs pdm_score_loss_weight > 0. 0 = off.
     pdm_total_score_loss_weight: float = 0.0
 
+    # Pairwise ranking loss between near-identical candidates (after FPD-Drive's safety-aware score correction, arXiv
+    # 2610.13232): the per-candidate BCE never asks the heads to order two trajectories 0.5 m apart, and the local
+    # search around the policy's choice (selection "local") picked less safe neighbours than the policy's own entry
+    # (final_evaluation.md, findings 7-8). Pairs: each of the pairwise_score_anchors codebook entries nearest to the ground-truth trajectory
+    # with its pairwise_score_neighbours nearest codebook entries (ADE over x, y); a pair counts for a head in
+    # pairwise_score_keys when the two targets differ by >= 0.5; loss = mean softplus(margin - (s_better - s_worse)) on
+    # the logits. Logs pdm_scores/pair_acc[_<key>]. Needs pdm_score_loss_weight > 0. 0 = off.
+    pairwise_score_loss_weight: float = 0.0
+    pairwise_score_keys: Tuple[str, ...] = (
+        "no_at_fault_collisions",
+        "drivable_area_compliance",
+        "driving_direction_compliance",
+    )
+    pairwise_score_anchors: int = 512
+    pairwise_score_neighbours: int = 32
+    pairwise_score_margin: float = 0.5
+
     # How compute_trajectory (evaluation / inference only; training and the loss are unaffected) picks the output:
     # "argmax" = the policy's most likely codebook entry (refined if the refiner is on); "score_heads" = the entry with
     # the highest predicted total score from the sub-score heads (aggregated like pdm_total_score_loss_weight), over all
@@ -84,6 +101,26 @@ class VisionLLMLoRAConfig:
     trajectory_selection: str = "argmax"
     selection_shortlist_size: int = 64  # "shortlist*" only
     selection_mixture_lambda: float = 10.0  # "mixture*" only
+    # Past inputs (cached by scripts/training/cache_history_features.py into a squashfs image; history_cache_path = its
+    # mount point, or several mounts of it joined by os.pathsep, read in turn; set by HISTORY_CACHE=1 in the training SLURM script; at evaluation the builders read the raw history
+    # frames). temporal_history_frame k > 0: the vision tower's second temporal slot (temporal_patch_size 2, filled with
+    # a copy of the current frame otherwise) gets the frame k * 0.5 s earlier, in video order (earlier, current); same
+    # token count. ego_history_tokens: 3 more <EGO_STATE> tokens after velocity / acceleration with the past (x, y)
+    # positions at t-0.5 / t-1.0 / t-1.5 s (current ego frame, divided by ego_history_position_scales) and, with
+    # ego_history_yaw_scale > 0, the past heading (wrapped to (-pi, pi], divided by that scale in rad; 0 = x, y only), replaced in
+    # training by learned "missing" embeddings with probability ego_history_dropout per scene (against extrapolating
+    # the past path); needs ego_state_tokens. Defaults: off (current behaviour).
+    history_cache_path: Optional[str] = None
+    temporal_history_frame: int = 0
+    ego_history_tokens: bool = False
+    ego_history_dropout: float = 0.5
+    ego_history_position_scales: Tuple[float, float, float] = (7.5, 15.0, 22.5)
+    ego_history_yaw_scale: float = 0.5
+
+    # "local" / "local_v1": discrete test-time search around the policy's most likely entry (select_trajectory): the
+    # selection_local_size nearest codebook entries by ADE, objective predicted total - selection_local_lambda * ADE (m).
+    selection_local_size: int = 64  # "local*" only
+    selection_local_lambda: float = 0.1  # "local*" only
 
     # Auxiliary perception losses (vision_llm_lora_aux.py; training only): a BEV decoder on the LLM's last-layer
     # hidden states at the image tokens predicts the cached maps of VisionLLMLoRAAuxTargetBuilder (160 x 128 cells of
@@ -143,6 +180,21 @@ class VisionLLMLoRAConfig:
     rl_beta: float = 0.02
     rl_reference_cache_path: Optional[str] = None
     rl_reference_head_path: Optional[str] = None
+    # Two-frame extended comfort (EC) in the RL-3 reward (vision_llm_lora_agent.compute_loss, ec_torch.py). The
+    # previous plan is the current model's argmax at t - 0.5 s (a no-grad forward on the cached past camera frame and
+    # past ego status, eval mode); EC of every entry at t against it is simulated on the GPU as the official scorer does.
+    # Reward = M * (5 EP + 5 TTC + 2 LK + 2 HC + rl_ec_weight * EC) / (14 + rl_ec_weight) with M the product of the
+    # multiplicative sub-scores (rl_multiplier in the RL reference cache), i.e. the official EPDMS for rl_ec_weight = 2.
+    # Needs history_cache_path (HISTORY_CACHE=1) and rl_ec_tracking_path (scripts/training/precompute_ec_tracking.py).
+    # Not with temporal_history_frame / ego_history_tokens (their previous frame would need older inputs). 0 = off.
+    rl_ec_weight: float = 0.0
+    rl_ec_tracking_path: Optional[str] = None
+    # Previous plan of the EC reward: "argmax" (the model's argmax at t - 0.5 s, as above) or "shortlist" (the model's
+    # most likely entry among the first rl_ec_previous_shortlist_size entries of the scorer's shortlist at t - 0.5 s,
+    # i.e. what the "shortlist" selection outputs there; rl_previous_shortlist in the RL reference cache, written by
+    # cache_rl_reference.py --previous-shortlists from scripts/training/cache_scorer_shortlists.py).
+    rl_ec_previous_plan: str = "argmax"
+    rl_ec_previous_shortlist_size: int = 256
 
     # Input resolution fed to the vision encoder: square tiles, the stitched panorama is 6x2 tiles plus a
     # thumbnail. 128 avoids padding every tile to the 32-px merge grid (docs/vision_llm_lora_findings.md F10).

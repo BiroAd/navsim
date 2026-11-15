@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=vlm_loss_probe
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu,ai
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks-per-node=1

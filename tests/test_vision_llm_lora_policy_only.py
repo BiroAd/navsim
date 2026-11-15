@@ -83,3 +83,34 @@ def test_needs_the_trajectory_embedding_head():
     config = SimpleNamespace(head_type="linear", gradient_checkpointing=False)
     with pytest.raises(ValueError):
         VisionLLMLoRAModel._freeze_all_but_policy_head(_Stub(), config)
+
+
+class _LeakyLLM(_Backbone):
+    """Stands in for the LLM with a leftover input-grad hook: its output would carry a graph if autograd were on."""
+
+    def __init__(self):
+        super().__init__()
+        self.layer = nn.Linear(16, 16)
+
+    def forward(self, inputs_embeds, **kwargs):
+        return SimpleNamespace(last_hidden_state=self.layer(inputs_embeds.requires_grad_(torch.is_grad_enabled())))
+
+
+@pytest.mark.parametrize("policy_only", [True, False])
+def test_policy_only_forward_keeps_no_backbone_graph(policy_only):
+    stub = _Stub()
+    stub.llm = _LeakyLLM()  # registered, so _freeze sees its parameters
+    stub.model = SimpleNamespace(language_model=stub.llm, visual=_Backbone())
+    stub.config = SimpleNamespace(train_policy_head_only=policy_only)
+    stub.aux_decoder = None
+    stub.decode_trajectory = lambda ids: torch.zeros(ids.shape[0], 8, 3)
+    stub._encode_inputs = lambda features: (torch.randn(3, 6, 16), None, None, None, None)
+    if policy_only:
+        _freeze(stub)
+    predictions = VisionLLMLoRAModel.forward(stub, features={})
+    llm_out = []
+    stub.model.language_model.register_forward_hook(lambda m, i, o: llm_out.append(o.last_hidden_state))
+    VisionLLMLoRAModel.forward(stub, features={})
+    assert llm_out[0].requires_grad is not policy_only  # no activations kept for a backward through the backbone
+    predictions["trajectory_logits"].logsumexp(-1).sum().backward()  # the policy head still trains
+    assert stub.traj_classifier.classifier.scene_proj.weight.grad is not None

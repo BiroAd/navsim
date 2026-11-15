@@ -198,15 +198,21 @@ def reference_head(path: str, device: torch.device) -> PolicyHead:
 
 def rl_loss_terms(
     token_logits: torch.Tensor, targets: Dict[str, torch.Tensor], beta: float, reference_head_path: str,
-    shortlist_sizes: Sequence[int] = (64, 256),
+    shortlist_sizes: Sequence[int] = (64, 256), ec: Optional[torch.Tensor] = None, ec_weight: float = 0.0,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """
     RL-3 loss: expected_reward_kl_loss of the policy logits (B, K) against the cached rewards, KL to the start policy.
     Metrics (logged as <train|val>/rl/<name>): expected_reward, kl, argmax, shortlist_<k> (score of the policy's most
     likely entry among the start model's top-k), argmax_zero, changed (argmax differs from the start policy's), entropy,
     and shortlist_<k>_gap = 1 - shortlist_<k> (a "min" checkpoint monitor).
+    With ec (B, K) in {0, 1} (EC of every entry against the previous plan) and ec_weight > 0, the reward becomes
+    ec_reward(): the official EPDMS weighting for ec_weight = 2; all metrics above then use it, and ec_argmax, ec_expected
+    (EC of the argmax / under pi) and argmax_no_ec (the argmax under the reward without EC) are added.
     """
     rewards = targets["rl_reward"].float()
+    base_rewards = rewards
+    if ec is not None and ec_weight > 0:
+        rewards = ec_reward(rewards, targets["rl_multiplier"].float(), ec.float(), ec_weight)
     with torch.no_grad():
         ref_logits = reference_head(reference_head_path, token_logits.device)(targets["rl_reference_fused"].float())
     loss, stats = expected_reward_kl_loss(token_logits, rewards, ref_logits, beta)
@@ -217,4 +223,22 @@ def rl_loss_terms(
         extra[f"rl/{name}"] = metrics[name].mean()
     for k in shortlist_sizes:
         extra[f"rl/shortlist_{k}_gap"] = 1.0 - extra[f"rl/shortlist_{k}"]
+    if ec is not None and ec_weight > 0:
+        with torch.no_grad():
+            log_p = token_logits.detach().float().log_softmax(-1)
+            best = log_p.argmax(-1, keepdim=True)
+            extra["rl/ec_argmax"] = ec.float().gather(1, best).mean()
+            extra["rl/ec_expected"] = (log_p.exp() * ec.float()).sum(-1).mean()
+            extra["rl/ec_any"] = (ec > 0).any(-1).float().mean()
+            extra["rl/argmax_no_ec"] = base_rewards.gather(1, best).mean()
     return loss, extra
+
+
+def ec_reward(rewards: torch.Tensor, multiplier: torch.Tensor, ec: torch.Tensor, ec_weight: float) -> torch.Tensor:
+    """
+    M * (5 EP + 5 TTC + 2 LK + 2 HC + w * EC) / (14 + w) from the cached total r = M * (5 EP + 5 TTC + 2 LK + 2 HC) / 14:
+    (14 r + w M EC) / (14 + w). multiplier = M (rl_multiplier: the product of the stored multiplicative sub-scores, set
+    to 0 where r = 0; the stored sub-scores have the human-penalty filter applied and r does not, so where the filter
+    changed a sub-score M can be off; cache_rl_reference.py).
+    """
+    return (14.0 * rewards + ec_weight * multiplier * ec) / (14.0 + ec_weight)

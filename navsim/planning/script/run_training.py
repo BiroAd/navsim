@@ -18,6 +18,32 @@ from navsim.planning.training.agent_lightning_module import AgentLightningModule
 from navsim.planning.training.dataset import CacheOnlyDataset, Dataset
 
 from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.strategies import DDPStrategy
+
+
+class KeepModelOnDeviceDDPStrategy(DDPStrategy):
+    """
+    DDPStrategy ("ddp") whose teardown leaves the model where it is. Lightning's Strategy.teardown copies the model of
+    every rank to host memory when fit ends (pytorch_lightning/strategies/strategy.py, lightning_module.cpu()); with the
+    4B VLM that is ~10 GB per rank at once, which OOM-killed the 4-GPU jobs after training (14929067/68: 15-16 GB peak
+    per task vs ~4 GB during training). The process exits right after fit, so nothing needs the CPU copy. The
+    optimizer states stay on the device too: their move to host memory (~0.8 GB per rank with LoRA + aux decoder)
+    OOM-killed the 9-11 h aux runs 14933663/64 at the end, whose host memory had crept to 93-94% of 30G. DDP unwrapping
+    and the accelerator teardown are unchanged.
+    """
+
+    def teardown(self) -> None:
+        module = self.lightning_module
+        optimizers = self._optimizers
+        self._optimizers = []  # _optimizers_to_device(self.optimizers, cpu) in Strategy.teardown then moves nothing
+        if module is not None:
+            module.cpu = lambda: module  # instance attribute shadows nn.Module.cpu for this call only
+        try:
+            super().teardown()
+        finally:
+            self._optimizers = optimizers
+            if module is not None:
+                del module.cpu
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +214,11 @@ def main(cfg: DictConfig) -> None:
     )
 
     # Include early_stopping in your callbacks list
+    trainer_params = dict(cfg.trainer.params)
+    if trainer_params.get("strategy") == "ddp":
+        trainer_params["strategy"] = KeepModelOnDeviceDDPStrategy()
     trainer = pl.Trainer(
-        **cfg.trainer.params,
+        **trainer_params,
         callbacks=[best_model_checkpoint, epoch_checkpoint, early_stopping] + agent.get_training_callbacks(),
         logger=wandb_logger,
     )

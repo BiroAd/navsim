@@ -12,8 +12,8 @@
 # AFTER       with PRED: job id the CPU jobs wait for (afterok), e.g. a GPU job still running
 # SCORES_PRED sub-score logits from this prediction folder instead of the model's own (RL-3: the start model,
 #             p3_aux_policy_ep03); passed on to the CPU jobs
-# CPU jobs: 4 CPUs (cpu partition: at most 2000 MB per core, more memory adds idle cores). navtest 8000M / 25 min
-# (18-21 min; 6G peaked at 5.9 GB and job 14927280 was OOM-killed at the end), navhard 6G / 40 min (31 min, 4.7 GB).
+# CPU jobs: 4 CPUs (cpu partition: at most 2000 MB per core, more memory adds idle cores). navtest 8000M / 30 min
+# (18-21 min, up to 24.6 min with 20 jobs at once on 2026-11-09; 6G peaked at 5.9 GB and job 14927280 was OOM-killed at the end), navhard 6G / 50 min (31 min, 4.7 GB; 31-40 min with 20+ jobs at once, 14935530 timed out at 40 min).
 # Run from the repository root with the environment active (sbatch passes it on).
 set -euo pipefail
 : "${NAVSIM_DEVKIT_ROOT:?}" "${NAVSIM_EXP_ROOT:?}"
@@ -48,9 +48,9 @@ declare -A NAVHARD=()
 for entry in $SELECTIONS; do
     selection=${entry%%:*}
     k=$K; [[ $entry == *:* ]] && k=${entry##*:}
-    score navtest "$selection" "$k" 00:25:00 8000M
+    score navtest "$selection" "$k" 00:30:00 8000M
     NAVHARD["${selection%_v1}:$k"]=1
 done
 for entry in "${!NAVHARD[@]}"; do
-    score navhard_two_stage "${entry%%:*}" "${entry##*:}" 00:40:00 6G
+    score navhard_two_stage "${entry%%:*}" "${entry##*:}" 00:50:00 6G
 done
