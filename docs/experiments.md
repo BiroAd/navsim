@@ -748,6 +748,23 @@ accumulation 8. The trajectory-embedding head is smaller than the linear one.
   score-head selection flag in `compute_trajectory`, official EPDMS of the best checkpoints, then RL from
   `p3_combo_balanced` epoch 8 on the precomputed codebook scores (Round 6, "Phase 3 decision before RL").
 - Disk: per-epoch checkpoints of finished runs (~18 × 8.8 GB each) can be deleted once the kept epochs are chosen.
+- Future work (2026-11-16): a 4:1 front row instead of 6:1, for more vertical view at the front. The 6:1 centre crop of
+  the 4096 px wide L0 | F0 | R0 row keeps only 683 of 1080 rows (≈ 25° vertically, ±12° around the horizon; ground
+  visible from ~6 m), while the rear row keeps 960 rows (≈ 36°), because L0/R0 lose 416 px per side and the row is
+  narrower (findings F11). At 4:1 the front row keeps 1024 rows. Rear row unchanged (6:1, 768 × 128, 96 tokens).
+  Horizontal resolution: F0 strip pixels / 72.3°.
+
+  | Front row option | Height kept | Vertical view | Tokens | Horizontal resolution | Cost |
+  |---|---|---|---|---|---|
+  | 6:1 (current), 768 × 128 | 683 rows | ≈ 25° | 96 | 5.0 px/° | – |
+  | 4:1, same width, 768 × 192 | 1024 rows | ≈ 38° | 144 | 5.0 px/° | +48 tokens (prompt 268 → 316) |
+  | 4:1, 640 × 160 | 1024 rows | ≈ 38° | 100 | 4.1 px/° | ~same tokens, lower horizontal resolution |
+  | 4:1, same height, 512 × 128 | 1024 rows | ≈ 38° | 64 | 3.3 px/° | −32 tokens, horizontal resolution −33% |
+
+  Not a config switch: the cache stores 13 square tiles and `image_layout: strips` rebuilds each row from 6 of them, so
+  a front row of another shape needs a builder change behind a new flag (default = current layout), a fresh
+  `cache_path` (~206k files; pack it into squashfs) and retraining from phase 1. Vertical angles from the
+  distortion-corrected calibration (fx 1545, cy 560, k1 −0.36), ±1°.
 
 ### Phase 1 with past inputs (p1hist, started 2026-11-10)
 

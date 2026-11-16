@@ -122,6 +122,8 @@ almost exactly the overlap with F0: the panorama seams L0|F0 and F0|R0 repeat 1�
 images agree within ~1.5°), R0|R1 and L1|L0 leave < 1° (images: up to 3°), and the rear row repeats ~4° at both B0
 seams. So coverage is ~360° with no real blind spot. Horizontal resolution in the strips: F0 and L0/R0 5.0 px/°,
 rear 3.5 px/°. `scripts/visualization/plot_input_formation.py` (`camera_fov`) now undistorts before drawing the rig.
+Future work: a 4:1 front row would keep 1024 instead of 683 rows (≈ 38° instead of ≈ 25° vertically); options and
+costs in experiments.md, "Open items".
 The 13th image is now selectable with `thumbnail` (config default `canvas` = original squeezed canvas; agent YAML
 sets `front_zoom`): F0 rows 290:674, cols 768:1152, i.e. 14.2° wide and about −5.6° to +8.5° around the horizon
 (fx 1545, cy 560, ~1.5° downward pitch) at ~9 px/°, for lead vehicles and traffic lights ahead. This offsets the
