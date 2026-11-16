@@ -624,7 +624,7 @@ RL β = 0.02 v1 0.899 / v2 0.872 / navhard 0.383 vs p3_aux_policy 0.892 / 0.867 
 Config flags `rl_loss_weight`, `rl_beta`, `rl_reference_cache_path`, `rl_reference_head_path` (`vision_llm_lora_rl.py`,
 `rl_loss_terms`; tests `tests/test_vision_llm_lora_rl3.py`); per-scene data from `scripts/training/cache_rl_reference.py`
 (`exp/rl_reference/<model>/`). Same exact objective as RL-1; π_ref = the start model's frozen policy head on its cached
-fused state; all imitation and score losses 0; phase 3 with the start run's LR multipliers (traj 0.2); 4 GPUs, batch
+fused state; all imitation and score losses 0; phase 3, LR multipliers of lr_base 5e-4: LLM LoRA 0.2 and vision LoRA 0.1 (as p3_aux), trajectory head + planner queries 0.2 (new: p3_aux used the default 0.10, p3_aux_policy 1.0), ego tokens 0.12 (default); 4 GPUs, batch
 4 × accum 8, val every half epoch, monitor `val/rl/shortlist_256_gap`. The scorer stays the start model: evaluate with
 `SCORES_PRED=<start model predictions>`. Jobs and W&B ids: `exp/rl3_logs/rl3_runs_2026-11-08.txt`.
 All 2-epoch jobs show FAILED / OUT_OF_MEMORY: Lightning's teardown copied every rank's model to host RAM after `fit`

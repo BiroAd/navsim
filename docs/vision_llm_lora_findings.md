@@ -115,6 +115,13 @@ top row L0|F0|R0 with TransFuser's horizontal crop, bottom row full-width R1|B0|
 L2/R2), each row centre-cropped to 6:1. Same 13 × 16 tokens. Coverage 194° → 332° (largest gap ≤ 6°), front vertical
 FOV 16.5° → 24.9°, front resolution 7.9 → 5.3–5.7 px/°, rear 4.0 px/°. The agent's sensor config loads L1/R1 for
 this layout. L1/R1 verified present for all 103,288 navtrain scenes and all 75,122 test-split frames.
+Correction 2026-11-16: the angles above use the pinhole model, but the raw images keep strong barrel distortion
+(k1 −0.36, same coefficients for all cameras). Undistorted, each camera covers 72.3° (not 63.7°); neighbours overlap by
+15–18° (F0/L0, F0/R0, L0/L1, R0/R1) and ~4° (B0/L1, B0/R1). The 416 px side crop of L0/R0 (40.5° kept) removes
+almost exactly the overlap with F0: the panorama seams L0|F0 and F0|R0 repeat 1–2° (SIFT matches between the raw
+images agree within ~1.5°), R0|R1 and L1|L0 leave < 1° (images: up to 3°), and the rear row repeats ~4° at both B0
+seams. So coverage is ~360° with no real blind spot. Horizontal resolution in the strips: F0 and L0/R0 5.0 px/°,
+rear 3.5 px/°. `scripts/visualization/plot_input_formation.py` (`camera_fov`) now undistorts before drawing the rig.
 The 13th image is now selectable with `thumbnail` (config default `canvas` = original squeezed canvas; agent YAML
 sets `front_zoom`): F0 rows 290:674, cols 768:1152, i.e. 14.2° wide and about −5.6° to +8.5° around the horizon
 (fx 1545, cy 560, ~1.5° downward pitch) at ~9 px/°, for lead vehicles and traffic lights ahead. This offsets the
