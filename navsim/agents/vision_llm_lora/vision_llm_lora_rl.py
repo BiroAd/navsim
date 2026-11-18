@@ -199,9 +199,12 @@ def reference_head(path: str, device: torch.device) -> PolicyHead:
 def rl_loss_terms(
     token_logits: torch.Tensor, targets: Dict[str, torch.Tensor], beta: float, reference_head_path: str,
     shortlist_sizes: Sequence[int] = (64, 256), ec: Optional[torch.Tensor] = None, ec_weight: float = 0.0,
+    objective: str = "exact", group_size: int = 32, normalize_std: bool = True,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """
     RL-3 loss: expected_reward_kl_loss of the policy logits (B, K) against the cached rewards, KL to the start policy.
+    objective "grpo": grpo_loss instead (group_size samples per scene from pi, normalize_std = standard GRPO, False =
+    Dr. GRPO), same rewards and KL; adds rl/sampled_reward.
     Metrics (logged as <train|val>/rl/<name>): expected_reward, kl, argmax, shortlist_<k> (score of the policy's most
     likely entry among the start model's top-k), argmax_zero, changed (argmax differs from the start policy's), entropy,
     and shortlist_<k>_gap = 1 - shortlist_<k> (a "min" checkpoint monitor).
@@ -215,7 +218,12 @@ def rl_loss_terms(
         rewards = ec_reward(rewards, targets["rl_multiplier"].float(), ec.float(), ec_weight)
     with torch.no_grad():
         ref_logits = reference_head(reference_head_path, token_logits.device)(targets["rl_reference_fused"].float())
-    loss, stats = expected_reward_kl_loss(token_logits, rewards, ref_logits, beta)
+    if objective == "exact":
+        loss, stats = expected_reward_kl_loss(token_logits, rewards, ref_logits, beta)
+    elif objective == "grpo":
+        loss, stats = grpo_loss(token_logits, rewards, ref_logits, beta, group_size, normalize_std=normalize_std)
+    else:
+        raise ValueError(f"RL objective must be 'exact' or 'grpo', got {objective!r}")
     with torch.no_grad():
         metrics = selection_metrics(token_logits.detach(), rewards, targets["rl_shortlist"], shortlist_sizes, ref_logits)
     extra = {f"rl/{name}": value for name, value in stats.items()}

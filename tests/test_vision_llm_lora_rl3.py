@@ -81,6 +81,41 @@ def test_loss_adds_the_rl_term_only_when_enabled(tmp_path):
         **base, rl_loss_weight=2.0, rl_beta=0.05, rl_reference_head_path=path, rl_reference_cache_path="unused"))
     torch.testing.assert_close(on[0] - off[0], 2.0 * on[-1]["loss_terms/rl"])
     assert {"rl/kl", "rl/expected_reward", "rl/shortlist_256", "rl/shortlist_256_gap"} <= set(on[-1])
+    # rl_objective=grpo reaches grpo_loss (sampled_reward is only logged by it); the default stays exact
+    grpo = vision_llm_lora_loss(targets, predictions, VisionLLMLoRAConfig(
+        **base, rl_loss_weight=1.0, rl_reference_head_path=path, rl_reference_cache_path="unused",
+        rl_objective="grpo", rl_grpo_group_size=8, rl_grpo_normalize_std=False))
+    assert "rl/sampled_reward" in grpo[-1] and "rl/sampled_reward" not in on[-1]
+
+
+def test_rl_loss_terms_grpo(tmp_path):
+    k, b = 32, 4
+    head, path = _reference(tmp_path, k)
+    fused = torch.randn(b, 6).half()
+    shortlist = torch.stack([torch.randperm(k) for _ in range(b)]).short()
+    ref_logits = head(fused.float()).detach()
+    logits = torch.randn(b, k, requires_grad=True)
+
+    # equal rewards in every group: zero advantage, so GRPO is just beta * KL (both normalizations)
+    flat = {"rl_reward": torch.full((b, k), 0.5).half(), "rl_reference_fused": fused, "rl_shortlist": shortlist}
+    for normalize_std in (True, False):
+        loss, extra = rl_loss_terms(logits, flat, 0.1, path, (4,), objective="grpo", group_size=8,
+                                    normalize_std=normalize_std)
+        torch.testing.assert_close(loss, 0.1 * extra["rl/kl"])
+
+    # Dr. GRPO with the whole distribution's reward spread: the expected gradient equals the exact objective's
+    # (Monte Carlo over many groups)
+    torch.manual_seed(0)
+    rewards = torch.rand(b, k).half()
+    targets = {"rl_reward": rewards, "rl_reference_fused": fused, "rl_shortlist": shortlist}
+    exact, _ = rl_loss_terms(logits, targets, 0.0, path, (4,))
+    (exact_grad,) = torch.autograd.grad(exact, logits)
+    sampled, extra = rl_loss_terms(logits, targets, 0.0, path, (4,), objective="grpo", group_size=200_000,
+                                   normalize_std=False)
+    (grpo_grad,) = torch.autograd.grad(sampled, logits)
+    # grpo averages over B * G samples, the exact loss over B scenes: E[grad] = exact grad * (G - 1) / G ~ exact grad
+    torch.testing.assert_close(grpo_grad, exact_grad, atol=2e-3, rtol=0.05)
+    assert 0 <= extra["rl/sampled_reward"] <= 1
 
 
 def _save_predictions(folder: Path, outputs, codebook, tokens):

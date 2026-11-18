@@ -234,6 +234,8 @@ class VisionLLMLoRAAgent(AbstractAgent):
                     "rl_loss_weight > 0 needs rl_reference_cache_path (scripts/training/cache_rl_reference.py) and "
                     "rl_reference_head_path (rl_features/<run>/head.pt)"
                 )
+            if self._config.rl_objective not in ("exact", "grpo") or self._config.rl_grpo_group_size < 2:
+                raise ValueError("rl_objective must be 'exact' or 'grpo', and rl_grpo_group_size >= 2")
             builders.append(RLReferenceTargetBuilder(self._config.rl_reference_cache_path))
         return builders
 

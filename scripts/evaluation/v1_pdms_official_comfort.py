@@ -12,6 +12,7 @@ from the given CSV (same run). Upstream code is only called, not changed.
     python scripts/evaluation/v1_pdms_official_comfort.py --csv <pdm_navtest/<run>/<ts>/<ts>.csv> \
         --predictions $NAVSIM_EXP_ROOT/predictions/<pred>/navtest [--scores ...] --selection mixture_v1 --mixture-lambda 10
     python scripts/evaluation/v1_pdms_official_comfort.py --csv <human agent CSV> --human
+    python scripts/evaluation/v1_pdms_official_comfort.py --csv <result CSV> --from-run-config   # agent as scored
 """
 import argparse
 import os
@@ -45,6 +46,10 @@ def parse_args() -> argparse.Namespace:
                         default=Path(os.environ.get("NAVSIM_EXP_ROOT", ".")) / "metric_cache_navtest")
     parser.add_argument("--workers", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 4)))
     parser.add_argument("--out", type=Path, default=None, help="per-token CSV (default: next to --csv)")
+    parser.add_argument("--from-run-config", action="store_true",
+                        help="build the agent from the run's own Hydra config (<csv dir>/code/hydra/config.yaml: same "
+                        "predictions, scores_path, selection and selection parameters as the scored run) instead of "
+                        "--predictions/--scores/--selection/...")
     return parser.parse_args()
 
 
@@ -61,7 +66,12 @@ def _init(args: argparse.Namespace) -> None:
     _W["cache"] = MetricCacheLoader(args.metric_cache)
     _W["human"] = args.human
     if not args.human:
-        agent = instantiate(cfg.agent)
+        agent_cfg = cfg.agent
+        if args.from_run_config:
+            from omegaconf import OmegaConf
+
+            agent_cfg = OmegaConf.load(args.csv.parent / "code/hydra/config.yaml").agent
+        agent = instantiate(agent_cfg)
         agent.initialize()
         _W["agent"] = agent
 
@@ -82,8 +92,8 @@ def _comfort(token: str):
 
 def main() -> None:
     args = parse_args()
-    if not args.human and args.predictions is None:
-        raise SystemExit("give --predictions or --human")
+    if not args.human and args.predictions is None and not args.from_run_config:
+        raise SystemExit("give --predictions, --from-run-config or --human")
     df = pd.read_csv(args.csv)
     df = df[(df.token != "average_all_frames") & (df.valid == True)].set_index("token")  # noqa: E712
     with Pool(args.workers, initializer=_init, initargs=(args,)) as pool:

@@ -300,7 +300,8 @@ def vision_llm_lora_loss(
     if config.rl_loss_weight > 0:
         rl_loss, rl_extra = rl_loss_terms(
             token_logits, targets, config.rl_beta, config.rl_reference_head_path,
-            ec=predictions.get("rl_ec"), ec_weight=config.rl_ec_weight,
+            ec=predictions.get("rl_ec"), ec_weight=config.rl_ec_weight, objective=config.rl_objective,
+            group_size=config.rl_grpo_group_size, normalize_std=config.rl_grpo_normalize_std,
         )
         loss = loss + config.rl_loss_weight * rl_loss
         extra["loss_terms/rl"] = rl_loss.detach()

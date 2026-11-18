@@ -180,6 +180,13 @@ class VisionLLMLoRAConfig:
     rl_beta: float = 0.02
     rl_reference_cache_path: Optional[str] = None
     rl_reference_head_path: Optional[str] = None
+    # RL-3 objective (same reward, same KL to the start policy): "exact" = -E_pi[r] over all K entries (default, the
+    # RL-3 runs); "grpo" = vision_llm_lora_rl.grpo_loss: rl_grpo_group_size entries drawn from pi per scene, policy
+    # gradient on their log-probabilities with the group-relative advantage, plus the exact KL. rl_grpo_normalize_std:
+    # divide the advantage by the group std (standard GRPO) or not (Dr. GRPO; checkpoint_evaluation.md findings 47-48).
+    rl_objective: str = "exact"
+    rl_grpo_group_size: int = 32
+    rl_grpo_normalize_std: bool = True
     # Two-frame extended comfort (EC) in the RL-3 reward (vision_llm_lora_agent.compute_loss, ec_torch.py). The
     # previous plan is the current model's argmax at t - 0.5 s (a no-grad forward on the cached past camera frame and
     # past ego status, eval mode); EC of every entry at t against it is simulated on the GPU as the official scorer does.
