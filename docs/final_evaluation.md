@@ -975,6 +975,44 @@ this batch completed (27 after a resubmission, finding 58). `exp/rl3_logs/collec
 | navhard EC rule, shortlist base n 16 / **n 64** | 0.433 / **0.438** | 0.011 / 0.011 | 0.418-0.455 | 0.434 / 0.434 |
 | navhard EC rule, mixture base n 16 / n 64 | 0.419 / 0.425 | 0.014 / 0.012 | 0.395-0.440 | 0.417 / 0.422 |
 
+Per seed (same runs; seeds 0 / 1 are `rl3_b0.005_ep01` / `rl3_b0.005_s1_ep01`, all files checked to come from the
+own-scorer jobs; best seed in bold):
+
+| Metric (own heads) | seed 0 | seed 1 | seed 2 | seed 3 | seed 4 | seed 5 |
+|---|---|---|---|---|---|---|
+| navtest v2 argmax | 0.8920 | 0.8925 | 0.8886 | 0.8916 | 0.8931 | **0.8934** |
+| navtest EC (argmax) | 0.780 | 0.779 | 0.763 | 0.786 | **0.787** | **0.787** |
+| navtest v2 shortlist k 256 | **0.8829** | 0.8826 | 0.8801 | 0.8805 | 0.8816 | 0.8818 |
+| navtest v2 mixture λ 10 | 0.8948 | 0.8945 | 0.8916 | 0.8925 | **0.8951** | 0.8943 |
+| navtest v2 EC rule, argmax base n 16 | 0.9012 | 0.9009 | 0.8973 | 0.9009 | **0.9020** | 0.9015 |
+| navtest v2 EC rule, argmax base n 64 | 0.9027 | 0.9026 | 0.8994 | 0.9028 | **0.9029** | 0.9025 |
+| navtest v2 EC rule, shortlist base n 16 | **0.8925** | **0.8925** | 0.8901 | 0.8896 | 0.8909 | 0.8913 |
+| navtest v2 EC rule, shortlist base n 64 | **0.8941** | 0.8938 | 0.8923 | 0.8916 | 0.8924 | 0.8932 |
+| navtest v2 EC rule, mixture base n 16 | 0.9041 | **0.9049** | 0.9013 | 0.9023 | 0.9041 | 0.9031 |
+| navtest v2 EC rule, mixture base n 64 | 0.9062 | **0.9077** | 0.9040 | 0.9042 | 0.9062 | 0.9056 |
+| navtest v1 argmax | 0.9143 | 0.9142 | 0.9131 | 0.9140 | 0.9141 | **0.9150** |
+| navtest v1 shortlist_v1 k 256 | **0.9110** | 0.9104 | 0.9095 | 0.9094 | 0.9093 | 0.9089 |
+| navtest v1 mixture_v1 λ 10 | **0.9178** | 0.9171 | 0.9165 | 0.9151 | 0.9177 | 0.9171 |
+| navhard argmax | 0.365 | 0.378 | 0.375 | 0.368 | **0.383** | 0.355 |
+| navhard shortlist k 256 | 0.412 | **0.420** | 0.417 | 0.410 | 0.397 | 0.404 |
+| (stage one / stage two) | 0.764 / 0.533 | 0.773 / 0.537 | 0.758 / 0.537 | 0.761 / 0.534 | 0.762 / 0.510 | 0.762 / 0.523 |
+| navhard EC rule, argmax base n 16 | 0.391 | 0.403 | 0.401 | 0.396 | **0.407** | 0.377 |
+| navhard EC rule, argmax base n 64 | 0.393 | 0.410 | **0.411** | 0.401 | 0.410 | 0.385 |
+| navhard EC rule, shortlist base n 16 | 0.434 | **0.449** | 0.439 | 0.428 | 0.418 | 0.429 |
+| navhard EC rule, shortlist base n 64 | 0.434 | **0.455** | 0.446 | 0.434 | 0.424 | 0.436 |
+| (stage one / stage two) | 0.781 / 0.547 | 0.794 / 0.567 | 0.777 / 0.563 | 0.778 / 0.552 | 0.778 / 0.534 | 0.782 / 0.553 |
+| navhard EC rule, mixture base n 16 | 0.417 | **0.435** | 0.432 | 0.421 | 0.412 | 0.395 |
+| navhard EC rule, mixture base n 64 | 0.422 | **0.440** | 0.435 | 0.429 | 0.416 | 0.406 |
+| (stage one / stage two) | 0.797 / 0.524 | 0.806 / 0.541 | 0.792 / 0.545 | 0.804 / 0.532 | 0.801 / 0.514 | 0.802 / 0.506 |
+
+**The navhard 0.456 in context.** The earlier navhard bests (finding 45: 0.441 / 0.454 for rl3_b0.005 seeds 0 / 1,
+0.456 for ecshort w 4 seed 0) used the control scorer (p3_aux_ctrl ep 2); the table above uses the own heads. On the two
+seeds with both, the control scorer is +0.007 / −0.001 with shortlist + EC n 64 (own 0.434 / 0.455) and +0.007 / +0.005
+with shortlist k 256 (own 0.412 / 0.420 vs 0.419 / 0.425). With the own heads the best of the six seeds is seed 1,
+**0.455** (stage one 0.794 / two 0.567; the 0.456 run: 0.786 / 0.556), i.e. the same level is reached by the plain
+recipe. It is the maximum of six runs: for six draws from 0.438 ± 0.011 the expected maximum is ≈ 0.452, so 0.455-0.456
+is what a best-of-several pick gives, not a better recipe. Seeds 2-5 were not scored with the control scorer.
+
 56. **Seed spread with 6 seeds** (replaces the 2-pair estimate of finding 48). navhard: SD 0.009-0.011 for the
     shortlist and EC rules (0.014 for the mixture base), so two single-seed runs differ by SD ≈ 0.013 and need
     ≳ 0.025 to be ~95% real (mean of 2 seeds each: ≈ 0.018) — finding 48's estimate holds. The navhard spread is in
