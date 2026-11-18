@@ -1005,6 +1005,31 @@ own-scorer jobs; best seed in bold):
 | navhard EC rule, mixture base n 64 | 0.422 | **0.440** | 0.435 | 0.429 | 0.416 | 0.406 |
 | (stage one / stage two) | 0.797 / 0.524 | 0.806 / 0.541 | 0.792 / 0.545 | 0.804 / 0.532 | 0.801 / 0.514 | 0.802 / 0.506 |
 
+Control scorer (p3_aux_ctrl ep 2): the evaluations that exist, seeds 0 and 1 only (seeds 2-5 were not scored with it).
+Output folders `<pred>__ctrlscorer_*` and, for the EC rule, `<pred>_ec[seq]_*` (own scorer: `<pred>_own_ec[seq]_*`).
+v1 here with HC (the v1-comfort value exists only for seed 0: 0.9189). The argmax-base EC rule gives the same
+trajectories with either scorer (identical scores), so it is not listed.
+
+| Metric | seed 0: control (own) | seed 1: control (own) |
+|---|---|---|
+| navtest v2 shortlist k 256 | 0.8836 (0.8829) | 0.8836 (0.8826) |
+| navtest v2 mixture λ 10 | 0.8965 (0.8948) | 0.8957 (0.8945) |
+| navtest v1 mixture_v1 λ 10, HC version | 0.9176 (0.9165) | 0.9159 (0.9155) |
+| navtest v2 EC rule, shortlist base n 16 / n 64 | 0.8923 / 0.8944 (0.8925 / 0.8941) | 0.8932 / 0.8951 (0.8925 / 0.8938) |
+| navtest v2 EC rule, mixture base n 16 / n 64 | 0.9055 / 0.9079 (0.9041 / 0.9062) | 0.9058 / **0.9085** (0.9049 / 0.9077) |
+| navhard shortlist k 256 | 0.419 (0.412) | 0.425 (0.420) |
+| (stage one / stage two) | 0.774 / 0.534 (0.764 / 0.533) | 0.782 / 0.539 (0.773 / 0.537) |
+| navhard mixture λ 10 | 0.395 (–) | – |
+| navhard EC rule, shortlist base n 16 | 0.437 (0.434) | 0.447 (0.449) |
+| navhard EC rule, shortlist base n 64 | 0.441 (0.434) | 0.454 (**0.455**) |
+| (stage one / stage two) | 0.795 / 0.549 (0.781 / 0.547) | 0.809 / 0.559 (0.794 / 0.567) |
+| navhard EC rule, mixture base n 16 / n 64 | 0.426 / 0.435 (0.417 / 0.422) | 0.445 / 0.447 (0.435 / 0.440) |
+
+The control scorer is slightly higher in most cells: navtest −0.0002 to +0.0017 for the scorer-based rules, navhard
+−0.002 to +0.013 (shortlist + EC: +0.007 / −0.001), with the gain in stage one (+0.009 to +0.015 where stages are
+listed; stage two −0.008 to +0.002). With two seeds this is suggestive
+only; the 6-seed numbers above are all own heads.
+
 **The navhard 0.456 in context.** The earlier navhard bests (finding 45: 0.441 / 0.454 for rl3_b0.005 seeds 0 / 1,
 0.456 for ecshort w 4 seed 0) used the control scorer (p3_aux_ctrl ep 2); the table above uses the own heads. On the two
 seeds with both, the control scorer is +0.007 / −0.001 with shortlist + EC n 64 (own 0.434 / 0.455) and +0.007 / +0.005
