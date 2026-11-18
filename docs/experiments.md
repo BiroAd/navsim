@@ -946,9 +946,11 @@ job ids in `exp/rl3_logs/rl3_seeds_2to5_2026-11-17.txt` (trainings 15175909 / 36
 Status 2026-11-18: all four trainings completed (2 h 21-24 min; end-of-training val argmax 0.8542-0.8577, KL
 2.64-3.15, entropy 3.08-3.12, i.e. seeds 1-5 within ±0.002 of each other on val). Predictions and EC selections all
 completed. 27 of the 105 scoring jobs of this batch TIMEOUT (limits 30 / 50 min; completed jobs took 16-28 / 29-36 min;
-all on six crowded nodes; final_evaluation.md finding 57), and the v1-comfort job of seed 5 argmax waits on one of them.
-Resubmitted with 60 / 90 min (`exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`, jobs 15199720-15199772): all
-completed. Results: final_evaluation.md section "Seeds of rl3_b0.005" (findings 56-57).
+all on six crowded nodes; final_evaluation.md finding 58). Resubmitted with 60 / 90 min
+(`exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`, jobs 15199720-15199772): all completed, every navtest result 12,146
+valid scenes, no invalid navhard scenes. Results (6-seed mean ± SD, own heads): navtest v2 0.9056 ± 0.0014 (mixture
++ EC n 64), navtest v1 0.9169 ± 0.0010 (mixture_v1), navhard 0.438 ± 0.011 (shortlist + EC n 64); final_evaluation.md
+section "Seeds of rl3_b0.005" (findings 56-57).
 
 ### RL-3 with the GRPO objective (submitted 2026-11-17)
 
@@ -980,7 +982,9 @@ train-val gap is larger (0.11-0.12 vs 0.07). Dr. GRPO equals the exact runs (0.8
 3.06). 12 of the 42 scoring jobs TIMEOUT (GRPO β 0.05 navtest mixture / mixture_v1 and both navhard, GRPO β 0.02 navtest
 argmax / shortlist / shortlist_v1, Dr. GRPO β 0.05 navtest shortlist_v1 / mixture / mixture_v1 and both navhard), and 5
 v1-comfort jobs wait on them; resubmitted (`exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`), all completed. Official
-results: final_evaluation.md section "RL-3 with the GRPO objective" (findings 53-55).
+results: final_evaluation.md section "RL-3 with the GRPO objective" (findings 53-55): standard GRPO fails (navtest
+argmax 0.775-0.806 vs ~0.892, navhard shortlist ~0.35 vs ~0.41); Dr. GRPO equals the exact objective within the
+seed spread. The exact objective stays the RL-3 objective.
 
 ### RL-3 with two-frame extended comfort in the reward (submitted 2026-11-14)
 

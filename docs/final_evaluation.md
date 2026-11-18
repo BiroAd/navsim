@@ -2,19 +2,20 @@
 
 Official PDM scores of the thesis models, from raw camera images through the NAVSIM devkit scripts. The model-selection
 proxy (navtrain val, precomputed codebook scores) is in [checkpoint_evaluation.md](checkpoint_evaluation.md); runs and
-their settings are in [experiments.md](experiments.md). Last updated 2026-11-18 (v1 PDMS now with the v1 comfort term
-everywhere in the main tables, findings 51-52).
+their settings are in [experiments.md](experiments.md). Last updated 2026-11-18: v1 PDMS with the v1 comfort term in the main
+tables (findings 51-52), RL-3 with GRPO / Dr. GRPO (53-55), 6 seeds of rl3_b0.005 (56-58).
 
 **Current bests (2026-11-14), all from RL-3 β = 0.005 (p3_aux_policy ep 3 + RL-3, some with EC in the reward), human filter on:**
 
 | Benchmark | Without EC-aware selection | With EC-aware selection (section "EC-aware selection") |
 |---|---|---|
-| navhard (leaderboard metric) | 0.419 (shortlist k 256, control scorer; leaderboard **41.94**); 0.425 with RL-3 + EC reward w 4, shortlist previous plan | 0.441 (same + EC, top 64; stage one 0.795 / two 0.549; not yet submitted); **0.456** with RL-3 + EC reward w 4, shortlist previous plan (stage one 0.792 / two 0.570; pickle ready); seed replicates: rl3_b0.005 0.454, ecshort w 4 0.444, so the level is 0.449 ± ~0.01 and the EC-reward gain did not replicate (finding 42) |
-| navtest v2 EPDMS | 0.8983 (RL-3 + EC reward w 2, control scorer, mixture λ 10; 0.8965 without the EC reward) | **0.9079** (mixture λ 10 + EC, top 64, sequential; EC 0.917; finding 39); seed 1: 0.9085 (finding 43) |
-| navtest v1 PDMS (v1 comfort term) | 0.9193 (mixture_v1 λ 10, pairwise scorer; control 0.9189, own heads 0.9178; argmax 0.9143) | – (EC is not in v1; the rule costs v1 −0.0004 to −0.002) |
+| navhard (leaderboard metric) | 0.419 (shortlist k 256, control scorer; leaderboard **41.94**); 0.425 with RL-3 + EC reward w 4, shortlist previous plan | 0.441 (same + EC, top 64; stage one 0.795 / two 0.549; not yet submitted); **0.456** with RL-3 + EC reward w 4, shortlist previous plan (stage one 0.792 / two 0.570; pickle ready); seed replicates: rl3_b0.005 0.454, ecshort w 4 0.444, so the level is 0.449 ± ~0.01 and the EC-reward gain did not replicate (finding 42); with the own heads, 6 seeds of rl3_b0.005: **0.438 ± 0.011** (finding 57) |
+| navtest v2 EPDMS | 0.8983 (RL-3 + EC reward w 2, control scorer, mixture λ 10; 0.8965 without the EC reward) | **0.9079** (mixture λ 10 + EC, top 64, sequential; EC 0.917; finding 39); seed 1: 0.9085 (finding 43); own heads, 6 seeds: 0.9056 ± 0.0014 (finding 57) |
+| navtest v1 PDMS (v1 comfort term) | 0.9193 (mixture_v1 λ 10, pairwise scorer; control 0.9189, own heads 0.9178; argmax 0.9143); own heads, 6 seeds: 0.9169 ± 0.0010 | – (EC is not in v1; the rule costs v1 −0.0004 to −0.002) |
 
 Seed-averaged level of the thesis recipe (rl3_b0.005, 6 trainings, own heads; findings 56-57): navtest v2 0.9056 ±
 0.0014 (mixture + EC n 64), navtest v1 0.9169 ± 0.0010 (mixture_v1), navhard 0.438 ± 0.011 (shortlist + EC n 64).
+Objective: the exact RL objective; Dr. GRPO gives the same results, standard GRPO fails (findings 53-55).
 
 The EC-aware rule needs the plan of the previous frame. The numbers here take it from the saved prediction of the
 previous test scene; a leaderboard agent has to recompute it from the past frames in its own input. The models with
