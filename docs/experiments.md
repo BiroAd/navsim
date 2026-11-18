@@ -336,7 +336,8 @@ Observations:
   sub-scores; the total is the same either way); mounts
   `images/test_sensor_blobs.sqfs` per job). It prints the one-stage EPDMS and a v1-style PDMS recomputed from the
   sub-scores (NC·DAC·DDC·(5 EP + 5 TTC + 2 HC)/12; approximation: v2 history comfort instead of v1 comfort, and whether
-  v1 multiplies by DDC is UNVERIFIED). Job 14871654: `p3_heads` epoch 5 with `score_heads` → `exp/pdm_navtest/` (first submitted as 14871628 with the filter off, cancelled while pending).
+  v1 multiplies by DDC is UNVERIFIED; since 2026-11-18 the official v1 numbers use the v1 comfort term,
+  `scripts/evaluation/v1_pdms_official_comfort.py --from-run-config`, final_evaluation.md findings 51-52). Job 14871654: `p3_heads` epoch 5 with `score_heads` → `exp/pdm_navtest/` (first submitted as 14871628 with the filter off, cancelled while pending).
 - **navtest result, job 14871654 (finished 2026-11-05 01:07, 2 h 24 min, 12146 scenes, 0 failed;
   `exp/pdm_navtest/p3_heads_best_ep05_score_heads_non_reactive/2026.11.04.22.46.04/`): EPDMS 0.7713** (the script's
   score; strict, the filter does not touch it). Sub-score columns (lenient, human-penalty filter on): NC 0.969,
@@ -738,6 +739,10 @@ accumulation 8. The trajectory-embedding head is smaller than the linear one.
 
 ## Open items
 
+- v1 PDMS with the v1 comfort term (done 2026-11-18): all 61 own-scorer navtest v1 results recomputed (jobs
+  15175655-15175716, `exp/v1_comfort_logs/`); final_evaluation.md section "v1 PDMS with the v1 comfort term for every
+  model". Still pending: own-heads mixture_v1 for RL-3 seed 1 and the EC-reward runs (15175717-15175728), and the v1
+  comfort of the GRPO and seed 2-5 runs (in their chains).
 - PDMS evaluation (navtest v1, navhard v2) of the best phase 1 checkpoint: not run yet.
 - Sub-score selection at inference (combine predicted PDM sub-scores to pick the trajectory): not implemented; the
   `p1c_scores` run uses the heads only as an auxiliary loss.
@@ -925,6 +930,32 @@ nothing reliable. No history model beats the no-history reference rl3_b0.005 (na
 0.419): RL-3 none, the matched baseline, is 0.005-0.0065 below it (run-to-run variation as large as the ego effect), and
 RL-3 ego lands in between (navhard 0.418, navtest −0.002 to −0.003). One run per variant, so the ego gain is suggestive,
 not conclusive.
+
+### Seeds 2-5 of rl3_b0.005 (submitted 2026-11-17)
+
+Goal: the seed SD of navhard / navtest with more degrees of freedom (6 seeds of rl3_b0.005 + 2 of ecshort w 4 = 6 df,
+pooled) and a 6-seed mean ± SD for the thesis model (final_evaluation.md finding 48). `rl3_b0.005_s{2,3,4,5}`: recipe
+identical to rl3_b0.005 / rl3_b0.005_s1, `++seed=N`. Evaluation of `epochs/epoch-epoch=01.ckpt` with the start model's
+own sub-score heads (`p3_aux_policy_ep03`): navtest argmax, shortlist / shortlist_v1 k 256, mixture / mixture_v1 λ 10,
+v1 PDMS with the real v1 comfort term for argmax / shortlist_v1 / mixture_v1; navhard argmax, shortlist k 256; EC rule
+with the own scorer (argmax / shortlist / mixture base, n 16 / 64; navtest sequential, navhard; prediction folders
+`<pred>_own_ec[seq]_*`, separate from the control-scorer `<pred>_ec[seq]_*`). The same own-scorer jobs that were missing
+for seeds 0 and 1 were added, so all six seeds are evaluated identically. Script `exp/rl3_logs/submit_rl3_seeds_2to5.sh`,
+job ids in `exp/rl3_logs/rl3_seeds_2to5_2026-11-17.txt` (trainings 15175909 / 36 / 62 / 88).
+
+### RL-3 with the GRPO objective (submitted 2026-11-17)
+
+Question: does the sampled objective (GRPO) match or beat the exact objective once the LoRA trains (RL-3)? On the
+policy head alone (RL-1), Dr. GRPO matched the exact objective and standard GRPO drifted (checkpoint_evaluation.md
+findings 47-48). New flags (defaults = the exact RL-3 runs): `rl_objective` exact | grpo, `rl_grpo_group_size` (32),
+`rl_grpo_normalize_std` (true = standard GRPO, false = Dr. GRPO); `vision_llm_lora_rl.grpo_loss`, tests in
+`tests/test_vision_llm_lora_rl3.py`. Six runs: `rl3_grpo_b{0.05,0.02,0.005}` and `rl3_drgrpo_b{0.05,0.02,0.005}`, G 32,
+otherwise exactly `rl3_b<beta>` (start p3_aux_policy ep 3, same reward = cached per-frame PDM total without EC, same
+KL to the start policy, LRs, 2 epochs, seed 0, 4 GPUs). Evaluation of `epochs/epoch-epoch=01.ckpt` with the start
+model's own sub-score heads (`SCORES_PRED=p3_aux_policy_ep03`): navtest argmax, shortlist / shortlist_v1 k 256,
+mixture / mixture_v1 λ 10, and v1 PDMS with the real v1 comfort term (`v1_pdms_official_comfort.py`) for argmax,
+shortlist_v1 and mixture_v1; navhard argmax and shortlist k 256. Submission script `exp/rl3_logs/submit_rl3_grpo.sh`,
+job ids in `exp/rl3_logs/rl3_grpo_runs_2026-11-17.txt` (trainings 15175565 / 77 / 91 / 603 / 615 / 631).
 
 ### RL-3 with two-frame extended comfort in the reward (submitted 2026-11-14)
 

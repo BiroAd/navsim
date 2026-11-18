@@ -2,7 +2,8 @@
 
 Official PDM scores of the thesis models, from raw camera images through the NAVSIM devkit scripts. The model-selection
 proxy (navtrain val, precomputed codebook scores) is in [checkpoint_evaluation.md](checkpoint_evaluation.md); runs and
-their settings are in [experiments.md](experiments.md). Last updated 2026-11-14.
+their settings are in [experiments.md](experiments.md). Last updated 2026-11-18 (v1 PDMS now with the v1 comfort term
+everywhere in the main tables, findings 51-52).
 
 **Current bests (2026-11-14), all from RL-3 β = 0.005 (p3_aux_policy ep 3 + RL-3, some with EC in the reward), human filter on:**
 
@@ -10,19 +11,19 @@ their settings are in [experiments.md](experiments.md). Last updated 2026-11-14.
 |---|---|---|
 | navhard (leaderboard metric) | 0.419 (shortlist k 256, control scorer; leaderboard **41.94**); 0.425 with RL-3 + EC reward w 4, shortlist previous plan | 0.441 (same + EC, top 64; stage one 0.795 / two 0.549; not yet submitted); **0.456** with RL-3 + EC reward w 4, shortlist previous plan (stage one 0.792 / two 0.570; pickle ready); seed replicates: rl3_b0.005 0.454, ecshort w 4 0.444, so the level is 0.449 ± ~0.01 and the EC-reward gain did not replicate (finding 42) |
 | navtest v2 EPDMS | 0.8983 (RL-3 + EC reward w 2, control scorer, mixture λ 10; 0.8965 without the EC reward) | **0.9079** (mixture λ 10 + EC, top 64, sequential; EC 0.917; finding 39); seed 1: 0.9085 (finding 43) |
-| navtest v1 PDMS | 0.9180 (mixture_v1 λ 10, pairwise scorer) | – (EC is not in v1; the rule costs v1 −0.0004 to −0.002) |
+| navtest v1 PDMS (v1 comfort term) | 0.9193 (mixture_v1 λ 10, pairwise scorer; control 0.9189, own heads 0.9178; argmax 0.9143) | – (EC is not in v1; the rule costs v1 −0.0004 to −0.002) |
 
 The EC-aware rule needs the plan of the previous frame. The numbers here take it from the saved prediction of the
 previous test scene; a leaderboard agent has to recompute it from the past frames in its own input. The models with
 past inputs (section "Models with past inputs") do not beat these.
 
 **Best models since 2026-11-10: p3_aux_policy ep 3 + RL-3 policy, sub-scores from a p3_aux scorer fine-tuned 5 more
-epochs** (sections "RL-3", "Official eval with the pairwise scorer", "Control scorer"): navtest v1 **0.9180** (**0.9193** with the
-v1 comfort term, section "v1 PDMS with the v1 comfort term"; β = 0.005,
-mixture_v1 λ = 10, pairwise scorer; control scorer 0.9176, a tie), navtest v2 EPDMS **0.8978** (β = 0.02, mixture
+epochs** (sections "RL-3", "Official eval with the pairwise scorer", "Control scorer"): navtest v1 **0.9193** (v1
+comfort term, sections "v1 PDMS with the v1 comfort term"; β = 0.005, mixture_v1 λ = 10, pairwise scorer; control
+scorer 0.9189, own heads 0.9178; HC version 0.9180), navtest v2 EPDMS **0.8978** (β = 0.02, mixture
 λ = 10, pairwise scorer; +0.0025 ± 0.0008 over the control scorer), navhard **0.419** (β = 0.005, shortlist k = 256,
 control scorer; a test-informed rule; own heads 0.412-0.413, pairwise scorer 0.382). Previous (2026-11-09, own heads):
-v1 0.9165, v2 0.8961, navhard 0.413. **Comparability (section "Calibration"):** navtest v2 here uses the fixed human
+v1 0.9165 (HC version; 0.9178 with v1 comfort), v2 0.8961, navhard 0.413. **Comparability (section "Calibration"):** navtest v2 here uses the fixed human
 filter; papers report filter-off numbers, where our best is 0.864 (human 0.903). navhard filter-on = leaderboard scoring.
 
 **Best model: p3_aux_policy ep 3 + RL-1 (exact β = 0.02, epoch 12) with `shortlist` k = 256** (p3_aux's LoRA and
@@ -37,7 +38,7 @@ combined runs (batch 1) agree within ±0.002 on navtest.
 | Metric | Split, script | Traffic | Formula |
 |---|---|---|---|
 | **EPDMS (one stage)** | navtest, 12,146 scenes, `run_pdm_score_one_stage.py` | log replay (`traffic_agents=non_reactive`) | NC · DAC · DDC · TLC · (5 EP + 5 TTC + 2 LK + 2 HC + 2 EC) / 16; EC drops out of the weights in scenes without an adjacent frame (17% of navtest) |
-| **v1 PDMS** | a navtest run (one stage), recomputed from its sub-score columns | log replay | NC · DAC · (5 EP + 5 TTC + 2 HC) / 12 (NAVSIM v1 formula with v2 history comfort) |
+| **v1 PDMS** | a navtest run (one stage), NC / DAC / EP / TTC from its columns, comfort re-simulated | log replay | NC · DAC · (5 EP + 5 TTC + 2 C) / 12 with the v1 comfort term C (since 2026-11-18, section "v1 PDMS with the v1 comfort term for every model"; before: v2 history comfort HC in place of C) |
 | **EPDMS (two stage)** | navhard_two_stage, 450 real + 5,462 synthetic scenes, `run_pdm_score.py` | reactive IDM in both stages (always) | per scene group, stage one score × weighted stage two score, averaged |
 
 ### Formulas (per scene, then averaged over scenes)
@@ -71,8 +72,9 @@ Caveats and decisions:
   2026-11-05 (tested on navtest scenes where the human runs a red light: the multiplier follows the column, 0 → 1).
   The filter acts on real scenes only (navtest; navhard stage one). It raises scores by ~+0.03 (navtest) and ~+0.02
   (navhard combined). Pre-fix numbers are kept at the end of this file.
-- **v1 PDMS** is computed from the same filter-on (fixed) columns, with v2 history comfort as the comfort term (a
-  slightly stricter check: it also covers the transition from the past trajectory; effect ≤ ~0.003 here). The v1
+- **v1 PDMS** is computed from the same filter-on (fixed) columns. Until 2026-11-17 it used v2 history comfort as the
+  comfort term; the main tables now use the v1 comfort term (findings 51-52: +0.002 for policy picks, −0.010 for
+  score-head picks); sections that still show the HC version say so. The v1
   devkit is not in this repo, so how close this is to the original v1 implementation (filter, comfort) is UNVERIFIED.
   v1 is higher than v2 for every model because v1 has fewer ways to lose points (no LK, EC, DDC, TLC).
 - **Selection** (`trajectory_selection`): `argmax` = the policy's most probable codebook entry; `score_heads` = the
@@ -90,30 +92,31 @@ v1 (selection does not depend on the weights) or the `shortlist_v1` job's; v2 = 
 0 failed scenes everywhere. Jobs: GPU 14933665/77/83/89 and 14933701 (14933671 cancelled: node cn04 fed 3.9 scenes/s),
 CPU 14933666-14933694 (list in `exp/rl3_logs/rl3_runs_2026-11-08.txt`).
 
-| Start model | β | Selection | v1 PDMS navtest | v2 EPDMS navtest | v2 EC | navhard | navhard stage 1 / 2 |
+| Start model | β | Selection | v1 PDMS navtest (v1 comfort) | v2 EPDMS navtest | v2 EC | navhard | navhard stage 1 / 2 |
 |---|---|---|---|---|---|---|---|
-| p3_aux_policy ep 3 (reference, re-evaluation) | – | argmax | 0.861 | 0.843 | 0.815 | 0.254 | 0.664 / 0.374 |
+| p3_aux_policy ep 3 (reference, re-evaluation) | – | argmax | 0.863 | 0.843 | 0.815 | 0.254 | 0.664 / 0.374 |
 | | – | shortlist k = 256 | 0.892 | 0.867 | 0.756 | 0.386 | 0.737 / 0.517 |
 | + RL-1 (reference) | 0.02 | shortlist k = 256 | 0.899 | 0.872 | 0.742 | 0.383 | 0.741 / 0.509 |
-| + **RL-3** | 0.005 | argmax | **0.913** | 0.892 | 0.780 | 0.365 | 0.760 / 0.473 |
+| + **RL-3** | 0.005 | argmax | **0.914** | 0.892 | 0.780 | 0.365 | 0.760 / 0.473 |
 | | 0.005 | shortlist k = 256 | 0.911 | 0.883 | 0.730 | 0.412 | 0.764 / 0.533 |
-| | 0.02 | argmax | 0.912 | **0.895** | 0.821 | 0.335 | 0.770 / 0.441 |
-| | 0.02 | shortlist k = 256 | 0.908 | 0.881 | 0.752 | **0.413** | 0.760 / 0.532 |
-| | 0.05 | argmax | 0.908 | 0.893 | 0.829 | 0.351 | 0.767 / 0.444 |
+| | 0.02 | argmax | **0.914** | **0.895** | 0.821 | 0.335 | 0.770 / 0.441 |
+| | 0.02 | shortlist k = 256 | 0.909 | 0.881 | 0.752 | **0.413** | 0.760 / 0.532 |
+| | 0.05 | argmax | 0.911 | 0.893 | 0.829 | 0.351 | 0.767 / 0.444 |
 | | 0.05 | shortlist k = 256 | 0.906 | 0.880 | 0.756 | 0.405 | 0.746 / 0.532 |
-| p3_heads_policy ep 2 (reference) | – | shortlist k = 64 | 0.886 | 0.853 | 0.668 | 0.359 | 0.722 / 0.483 |
-| + **RL-3** | 0.005 | argmax | 0.900 | 0.878 | 0.775 | 0.359 | 0.756 / 0.470 |
+| p3_heads_policy ep 2 (reference) | – | shortlist k = 64 | 0.885 | 0.853 | 0.668 | 0.359 | 0.722 / 0.483 |
+| + **RL-3** | 0.005 | argmax | 0.902 | 0.878 | 0.775 | 0.359 | 0.756 / 0.470 |
 | | 0.005 | shortlist k = 256 | 0.900 | 0.871 | 0.723 | 0.395 | 0.750 / 0.517 |
-| | 0.02 | argmax | 0.901 | 0.882 | 0.815 | 0.316 | 0.736 / 0.433 |
-| | 0.02 | shortlist k = 256 | 0.898 | 0.871 | 0.747 | 0.363 | 0.738 / 0.485 |
-| | 0.05 | argmax | 0.899 | 0.881 | 0.826 | 0.308 | 0.748 / 0.418 |
+| | 0.02 | argmax | 0.903 | 0.882 | 0.815 | 0.316 | 0.736 / 0.433 |
+| | 0.02 | shortlist k = 256 | 0.899 | 0.871 | 0.747 | 0.363 | 0.738 / 0.485 |
+| | 0.05 | argmax | 0.901 | 0.881 | 0.826 | 0.308 | 0.748 / 0.418 |
 | | 0.05 | shortlist k = 256 | 0.898 | 0.871 | 0.747 | 0.362 | 0.738 / 0.474 |
 
 Findings (no paired tests yet):
-1. RL-3 is far above RL-1: navtest v2 0.895 vs 0.872 (+0.023), v1 0.913 vs 0.899, navhard 0.413 vs 0.383.
+1. RL-3 is far above RL-1: navtest v2 0.895 vs 0.872 (+0.023), v1 0.914 vs 0.899 (v1 comfort), navhard 0.413 vs 0.383.
 2. navtest: the RL policy alone (`argmax`) beats every shortlist selection on v2 (+0.009 to +0.014), mostly through
    extended comfort (EC 0.78-0.83 vs 0.73-0.76): consecutive argmax picks are consistent, the scorer's re-ranking among
-   near-ties is not. v1 (no EC) is the same for argmax and shortlist_v1 (±0.002).
+   near-ties is not. On v1 (no EC) argmax is also above shortlist_v1: +0.003 / +0.005 for β 0.005 / 0.02 (2.4 / 3.6 SE)
+   with the v1 comfort term (finding 52; with HC +0.002 / +0.003).
 3. navhard: the scorer is still needed. `shortlist` k = 256 beats `argmax` by +0.036 to +0.078, all in stage two
    (0.53 vs 0.44-0.47); stage one is equal. The best selection therefore depends on the benchmark.
 4. β: on navtest v2 the order is 0.02 > 0.05 > 0.005 for argmax (EC falls with lower β), although 0.005 was val-best;
@@ -148,18 +151,18 @@ Same saved predictions (`predictions/rl3_b0.02_ep01`, sub-scores from p3_aux_pol
 `local` / `local_v1` (select_trajectory): among the N codebook entries nearest to the RL policy's argmax (ADE over
 x, y; median spacing 0.25 m, 64th neighbour at 0.71 m), the one with the best predicted total − λ · ADE. Same saved
 predictions and scorer as above; CPU jobs 14935522-14935545 (14935530 timed out at 40 min, rerun as 14935739). This is
-a test-set grid (sensitivity analysis), not a tuned result. Reference argmax: v1 0.9117, v2 0.8950, navhard 0.335.
+a test-set grid (sensitivity analysis), not a tuned result. Reference argmax: v1 0.9138 (v1 comfort), v2 0.8950, navhard 0.335.
 
-| N | λ | moved (navtest / navhard, 1000 scenes) | v1 navtest | v2 navtest | v2 EC | navhard | stage 1 / 2 |
+| N | λ | moved (navtest / navhard, 1000 scenes) | v1 navtest (v1 comfort) | v2 navtest | v2 EC | navhard | stage 1 / 2 |
 |---|---|---|---|---|---|---|---|
-| 64 | 0.02 | 68% / 85% | 0.8970 | 0.8702 | 0.768 | 0.331 | 0.718 / 0.458 |
-| 64 | 0.05 | 42% / 65% | 0.9011 | 0.8771 | 0.788 | 0.331 | 0.733 / 0.452 |
-| 64 | 0.1 | 21% / 42% | 0.9051 | 0.8837 | 0.804 | 0.332 | 0.743 / 0.454 |
-| 64 | 0.2 | 9% / 20% | 0.9081 | 0.8892 | 0.813 | 0.329 | 0.759 / 0.435 |
-| 128 | 0.02 | 69% / 87% | 0.8964 | 0.8678 | 0.757 | 0.330 | 0.721 / 0.455 |
-| 128 | 0.05 | 43% / 66% | 0.9002 | 0.8743 | 0.780 | 0.329 | 0.728 / 0.451 |
-| 128 | 0.1 | 22% / 44% | 0.9043 | 0.8831 | 0.801 | 0.334 | 0.747 / 0.453 |
-| 128 | 0.2 | 9% / 21% | 0.9081 | 0.8889 | 0.812 | 0.333 | 0.758 / 0.440 |
+| 64 | 0.02 | 68% / 85% | 0.8992 | 0.8702 | 0.768 | 0.331 | 0.718 / 0.458 |
+| 64 | 0.05 | 42% / 65% | 0.9033 | 0.8771 | 0.788 | 0.331 | 0.733 / 0.452 |
+| 64 | 0.1 | 21% / 42% | 0.9073 | 0.8837 | 0.804 | 0.332 | 0.743 / 0.454 |
+| 64 | 0.2 | 9% / 20% | 0.9102 | 0.8892 | 0.813 | 0.329 | 0.759 / 0.435 |
+| 128 | 0.02 | 69% / 87% | 0.8986 | 0.8678 | 0.757 | 0.330 | 0.721 / 0.455 |
+| 128 | 0.05 | 43% / 66% | 0.9024 | 0.8743 | 0.780 | 0.329 | 0.728 / 0.451 |
+| 128 | 0.1 | 22% / 44% | 0.9064 | 0.8831 | 0.801 | 0.334 | 0.747 / 0.453 |
+| 128 | 0.2 | 9% / 21% | 0.9102 | 0.8889 | 0.812 | 0.333 | 0.758 / 0.440 |
 
 7. Local search is worse than argmax everywhere and approaches it as λ grows (fewer moves); N does not matter.
    navtest sub-scores (N 64, λ 0.02 vs argmax): DAC 0.980 → 0.970, NC 0.981 → 0.976, LK 0.957 → 0.939, EC 0.821 →
@@ -203,17 +206,17 @@ The two rules chosen on the p3_aux family's val (mixture λ = 3 for v2, mixture_
 all six RL-3 models (CPU jobs 14944779-94; rl3_b0.02 mixture λ = 3 from 14934138/39; rl3_heads_b0.05 official runs
 GPU 14944773, CPU 14944774-78). 0 failed scenes.
 
-| Start model | β | navtest v1 (mixture_v1 λ 10) | navtest v2 (mixture λ 3) | navhard (mixture λ 3) | for reference: navhard shortlist k = 256 |
+| Start model | β | navtest v1 (mixture_v1 λ 10, v1 comfort) | navtest v2 (mixture λ 3) | navhard (mixture λ 3) | for reference: navhard shortlist k = 256 |
 |---|---|---|---|---|---|
-| p3_aux_policy | 0.005 | **0.9165** | 0.8942 | **0.374** (0.767 / 0.484) | 0.412 |
-| | 0.02 | 0.9131 | **0.8961** | 0.348 (0.768 / 0.449) | **0.413** |
-| | 0.05 | 0.9110 | 0.8952 | 0.350 (0.751 / 0.450) | 0.405 |
-| p3_heads_policy | 0.005 | 0.9042 | 0.8805 | 0.372 (0.754 / 0.489) | 0.395 |
-| | 0.02 | 0.9030 | 0.8842 | 0.333 (0.742 / 0.449) | 0.363 |
-| | 0.05 | 0.9000 | 0.8815 | 0.325 (0.743 / 0.432) | 0.362 |
+| p3_aux_policy | 0.005 | **0.9178** | 0.8942 | **0.374** (0.767 / 0.484) | 0.412 |
+| | 0.02 | 0.9151 | **0.8961** | 0.348 (0.768 / 0.449) | **0.413** |
+| | 0.05 | 0.9133 | 0.8952 | 0.350 (0.751 / 0.450) | 0.405 |
+| p3_heads_policy | 0.005 | 0.9058 | 0.8805 | 0.372 (0.754 / 0.489) | 0.395 |
+| | 0.02 | 0.9049 | 0.8842 | 0.333 (0.742 / 0.449) | 0.363 |
+| | 0.05 | 0.9021 | 0.8815 | 0.325 (0.743 / 0.432) | 0.362 |
 
-10. With validation-chosen rules the best numbers are RL-3 p3_aux_policy β = 0.005 for navtest v1 (**0.9165**, new
-    best; argmax 0.9129) and β = 0.02 for navtest v2 (0.8961). On navhard the lower β keeps more of the shortlist's
+10. With validation-chosen rules the best numbers are RL-3 p3_aux_policy β = 0.005 for navtest v1 (**0.9178** with v1
+    comfort, HC version 0.9165, new best; argmax 0.9143) and β = 0.02 for navtest v2 (0.8961). On navhard the lower β keeps more of the shortlist's
     benefit under mixture (0.374 vs 0.348), but the hard shortlist stays clearly better (0.412-0.413).
 11. The heads family's own val (`selection_val/rl3_heads_b0.02_ep01.csv`, jobs 14944795-97) agrees with the borrowed
     choice: mixture beats argmax (λ 3: +0.0026 ± 0.0009, λ 10: +0.0030 ± 0.0012, a tie), mixture_v1 λ 10 is the best v1
@@ -390,7 +393,91 @@ per-token CSVs `*_v1_comfort.csv` next to the result CSVs).
     progress 0.8742 vs 0.875, most likely v1/v2 devkit differences in the simulation and the PDM-Closed progress
     reference (the v1 devkit is not in this repo; UNVERIFIED). Models gain +0.0013-0.0014 (their plans start smoothly
     from the current state, so the history padding failed them less often than the human). Corrected best navtest v1:
-    **0.9193**; all v1 values elsewhere in this file are history-comfort values, ~0.0013 lower.
+    **0.9193**; all v1 values elsewhere in this file are history-comfort values, ~0.0013 lower. (Superseded in part by
+    finding 52: the shift is +0.002 for policy picks but −0.010 for score-head picks.)
+
+### v1 PDMS with the v1 comfort term for every model (2026-11-18)
+
+Every non-reactive navtest result that reports v1 (argmax runs and the `_v1` selections), recomputed with the v1
+comfort term: `v1_pdms_official_comfort.py --from-run-config` rebuilds the agent (selection, k / λ, scorer) from the
+run's own `code/hydra/config.yaml`, so each value is the same trajectory set as the original run, only the comfort
+term changes. Own sub-score heads only (RL-3: the start model's heads, `SCORES_PRED`; pairwise / control scorer runs
+were not recomputed, except the two in the table above). 61 CPU jobs 15175655-15175715, all completed; check job
+15175716 reproduces the hand-configured value of the table above (0.9913 / 0.9178). List of runs:
+`exp/v1_comfort_logs/todo_runs.txt`, per-token CSVs `*_v1_comfort.csv` next to each result CSV. Δ = v1 comfort − HC
+version. Main tables of this file (RL-3, val-chosen rules, past inputs, local search, re-evaluation 2026-11-08) now show
+these values; older sections (combined pipeline, selection rules 2026-11-06, ablation chain, RL-1) keep the HC values.
+
+| Model | Selection | comfort pass (v1) | **v1 PDMS (v1 comfort)** | HC version | Δ |
+|---|---|---|---|---|---|
+| p3_policy ep 7 | argmax | 0.998 | **0.7944** | 0.7926 | +0.0018 |
+| p3_combo_balanced ep 8 | argmax | 0.998 | **0.8327** | 0.8307 | +0.0020 |
+| p3_combo_balanced_aux ep 9 | argmax | 0.998 | **0.8429** | 0.8407 | +0.0022 |
+| | score_heads_v1 | 0.905 | **0.8523** | 0.8631 | −0.0108 |
+| | shortlist_v1 k 64 | 0.939 | **0.8671** | 0.8729 | −0.0058 |
+| | shortlist_v1 k 256 | 0.955 | **0.8688** | 0.8723 | −0.0035 |
+| | mixture_v1 λ 10 | 0.998 | **0.8687** | 0.8666 | +0.0021 |
+| p3_heads ep 5 | score_heads_v1 | 0.911 | **0.8713** | 0.8818 | −0.0105 |
+| p3_heads_policy ep 2 | shortlist_v1 k 64 | 0.974 | **0.8850** | 0.8859 | −0.0009 |
+| p3_aux ep 5 | score_heads_v1 | 0.915 | **0.8792** | 0.8894 | −0.0102 |
+| p3_aux_policy ep 3 | argmax | 0.999 | **0.8627** | 0.8607 | +0.0020 |
+| | shortlist_v1 k 64 | 0.975 | **0.8913** | 0.8922 | −0.0009 |
+| | shortlist_v1 k 256 | 0.988 | **0.8924** | 0.8915 | +0.0009 |
+| + RL-1 β 0.02 (ep 12) | shortlist_v1 k 256 | 0.985 | **0.8994** | 0.8988 | +0.0006 |
+| + RL-1 β 0.005, lr 3e-4 (ep 7) | shortlist_v1 k 256 | 0.984 | **0.8983** | 0.8979 | +0.0004 |
+| + RL-3 β 0.005 | argmax (2026-11-12) | 0.992 | **0.9143** | 0.9129 | +0.0014 |
+| | shortlist_v1 k 256 | 0.981 | **0.9110** | 0.9113 | −0.0003 |
+| | mixture_v1 λ 10 | 0.991 | **0.9178** | 0.9165 | +0.0013 |
+| + RL-3 β 0.005, seed 1 | argmax | 0.993 | **0.9142** | 0.9126 | +0.0016 |
+| + RL-3 β 0.02 | argmax | 0.997 | **0.9138** | 0.9117 | +0.0021 |
+| | shortlist_v1 k 256 | 0.984 | **0.9088** | 0.9083 | +0.0005 |
+| | mixture_v1 λ 10 | 0.997 | **0.9151** | 0.9131 | +0.0020 |
+| | local_v1 N 64 / 128, λ 0.02-0.2 (8 runs) | 0.997 | 0.8986-0.9102 | 0.8964-0.9081 | +0.0021-0.0022 |
+| + RL-3 β 0.05 | argmax | 0.999 | **0.9106** | 0.9083 | +0.0023 |
+| | shortlist_v1 k 256 | 0.986 | **0.9063** | 0.9056 | +0.0007 |
+| | mixture_v1 λ 10 | 0.999 | **0.9133** | 0.9110 | +0.0023 |
+| + RL-3 β 0.005 + EC reward w 2 / w 4 | argmax | 0.995 / 0.994 | **0.9095** / 0.9051 | 0.9076 / 0.9032 | +0.0019 |
+| + RL-3 β 0.005 + EC reward, shortlist previous plan, w 2 / w 4 | argmax | 0.993 / 0.994 | **0.9098** / 0.9047 | 0.9082 / 0.9029 | +0.0016 / +0.0018 |
+| | w 4, seed 1, argmax | 0.994 | 0.9052 | 0.9035 | +0.0017 |
+| p3_heads_policy ep 2 + RL-3 β 0.005 | argmax | 0.994 | **0.9017** | 0.9001 | +0.0016 |
+| | shortlist_v1 k 256 | 0.981 | 0.8996 | 0.8997 | −0.0001 |
+| | mixture_v1 λ 10 | 0.993 | **0.9058** | 0.9042 | +0.0016 |
+| p3_heads_policy ep 2 + RL-3 β 0.02 | argmax / shortlist_v1 k 256 / mixture_v1 λ 10 | 0.997 / 0.984 / 0.997 | 0.9028 / 0.8987 / **0.9049** | 0.9007 / 0.8982 / 0.9030 | +0.0021 / +0.0005 / +0.0019 |
+| p3_heads_policy ep 2 + RL-3 β 0.05 | argmax / shortlist_v1 k 256 / mixture_v1 λ 10 | 0.998 / 0.985 / 0.997 | 0.9008 / 0.8982 / **0.9021** | 0.8986 / 0.8976 / 0.9000 | +0.0022 / +0.0006 / +0.0021 |
+| p3hist_none / ego / prev / both policy | argmax | 0.999 | 0.8578 / 0.8603 / 0.8537 / 0.8527 | 0.8557 / 0.8583 / 0.8516 / 0.8507 | +0.0020-0.0021 |
+| | mixture_v1 λ 10 | 0.999 | 0.8884 / **0.8899** / 0.8836 / 0.8811 | 0.8862 / 0.8876 / 0.8814 / 0.8790 | +0.0021-0.0023 |
+| RL-3 p3hist_none / ego / prev / both | argmax | 0.993-0.994 | 0.9088 / 0.9113 / 0.9089 / 0.9076 | 0.9071 / 0.9097 / 0.9073 / 0.9060 | +0.0016-0.0017 |
+| | mixture_v1 λ 10 | 0.992-0.994 | 0.9123 / **0.9139** / 0.9120 / 0.9096 | 0.9107 / 0.9123 / 0.9106 / 0.9080 | +0.0014-0.0016 |
+
+Paired differences on navtest that change (12,146 scenes, mean ± SE; script
+`exp/v1_comfort_logs/paired_v1c.py`, same per-token CSVs):
+
+| Comparison | v1 (v1 comfort) | v1 (HC version) |
+|---|---|---|
+| p3_aux_policy shortlist_v1 k 256 − p3_aux score_heads_v1 | **+0.0132 ± 0.0019** | +0.0022 ± 0.0019 |
+| p3_heads_policy shortlist_v1 k 64 − p3_heads score_heads_v1 | **+0.0136 ± 0.0017** | +0.0041 ± 0.0017 |
+| p3_combo_balanced_aux shortlist_v1 k 64 − mixture_v1 λ 10 | −0.0017 ± 0.0021 (tie) | +0.0063 ± 0.0021 |
+| p3_aux_policy shortlist_v1 k 256 − k 64 | +0.0011 ± 0.0014 (tie) | −0.0007 ± 0.0014 (tie) |
+| RL-3 β 0.005 argmax − shortlist_v1 k 256 | **+0.0033 ± 0.0014** | +0.0016 ± 0.0014 |
+| RL-3 β 0.02 argmax − shortlist_v1 k 256 | **+0.0050 ± 0.0014** | +0.0034 ± 0.0014 |
+| RL-3 β 0.005 mixture_v1 λ 10 − argmax | +0.0035 ± 0.0010 | +0.0036 ± 0.0010 |
+| RL-1 β 0.02 − p3_aux_policy (shortlist_v1 k 256) | +0.0070 ± 0.0012 | +0.0073 ± 0.0012 |
+
+51. **v1 comfort is not uniformly more lenient than history comfort.** Policy picks (argmax, mixture, local) pass v1
+    comfort in 99.2-99.9% of scenes (HC: 98.2-98.3%) and gain +0.0013 to +0.0023. Picks of the sub-score heads over all
+    16,384 entries (`score_heads_v1`) pass only 90.5-91.5% and lose 0.010-0.011; shortlist picks lie in between
+    (k 256: 98.1-98.8%, ±0.001; k 64 with the weaker p3_combo_balanced_aux scorer: 93.9%, −0.006). HC pads the plan
+    with 1.5 s of human past states before the same `ego_is_comfortable` check, so it can only add failing time steps
+    in principle; that it passes more score-head picks LIKELY comes from the derivative filter in
+    `pdm_comfort_metrics.py` behaving differently at the plan start with and without the padded history (not verified
+    per metric). The v1 comfort check on the simulated plan alone is what the v1 formula specifies, so these are the
+    representative v1 numbers.
+52. **Conclusions that change:** (a) the policy head now helps v1 clearly: p3_aux_policy shortlist over p3_aux's heads
+    +0.013 (7 SE; HC version +0.002, a tie), the same for p3_heads (+0.014); (b) for p3_combo_balanced_aux the
+    shortlist k 64 no longer beats mixture_v1 on v1 (tie); (c) for RL-3 the policy argmax beats shortlist_v1 on v1
+    (+0.003 / +0.005, 2.4 / 3.6 SE), as it already did on v2. **Unchanged:** all RL gains (RL-1 +0.007, RL-3 over its
+    start, mixture_v1 over argmax +0.0035), the ranking of the RL-3 models and of the past-input variants, and the best
+    navtest v1: RL-3 β 0.005 mixture_v1 λ 10, **0.9178** with the own heads (0.9193 pairwise, 0.9189 control scorer).
 
 ### Models with past inputs: policy stage and RL-3 (2026-11-14)
 
@@ -401,20 +488,21 @@ frames, also those of navhard's synthetic scenes, all present); scoring: 72 CPU 
 all completed. Selections: navtest v1 = mixture_v1 λ 10, v2 = mixture λ 10 (argmax: one run), navhard = shortlist
 k = 256. Scorers: argmax (none); own = the policy model's own heads (RL-3: its start policy model's heads,
 `SCORES_PRED`); control = p3_aux_ctrl ep 2 (the same for all, isolates the policy); pairwise = p3_aux_pair ep 2
-(navtest only, RL-3 only). v1 with HC (NC · DAC · (5 EP + 5 TTC + 2 HC)/12). navhard: combined (stage one / stage two).
+(navtest only, RL-3 only). v1 with the v1 comfort term in the argmax and own columns and for the reference row
+(2026-11-18); with HC in the other control / pairwise cells (not recomputed; v1 comfort adds ~+0.0015 to policy-based picks). navhard: combined (stage one / stage two).
 
 | Model | argmax: v1 / v2 / navhard | own scorer: v1 / v2 / navhard | control scorer: v1 / v2 / navhard | pairwise: v1 / v2 |
 |---|---|---|---|---|
-| p3_aux_policy (reference) | 0.8607 / 0.8433 / 0.254 | – | – | – |
-| p3hist_none_policy | 0.8557 / 0.8386 / 0.258 | 0.8862 / 0.8661 / 0.375 | 0.8920 / 0.8709 / 0.373 | – |
-| p3hist_ego_policy | 0.8583 / 0.8416 / 0.242 | 0.8876 / 0.8688 / 0.369 | 0.8939 / 0.8752 / 0.362 | – |
-| p3hist_prev_policy | 0.8516 / 0.8346 / 0.236 | 0.8814 / 0.8615 / 0.374 | 0.8943 / 0.8751 / 0.365 | – |
-| p3hist_both_policy | 0.8507 / 0.8337 / 0.227 | 0.8790 / 0.8624 / 0.339 | 0.8916 / 0.8730 / 0.361 | – |
-| RL-3 from p3_aux_policy (rl3_b0.005, reference) | 0.9129 / 0.8920 / 0.365 | 0.9165 / – / 0.412 | **0.9176 / 0.8965 / 0.419** | **0.9180** / 0.8958 |
-| RL-3 p3hist_none | 0.9071 / 0.8855 / 0.324 | 0.9107 / 0.8872 / 0.403 | 0.9130 / 0.8913 / 0.384 | 0.9130 / 0.8904 |
-| RL-3 p3hist_ego | 0.9097 / 0.8897 / 0.355 | 0.9123 / 0.8924 / 0.408 | 0.9150 / 0.8932 / **0.418** | 0.9151 / 0.8943 |
-| RL-3 p3hist_prev | 0.9073 / 0.8849 / 0.318 | 0.9106 / 0.8882 / 0.391 | 0.9147 / 0.8926 / 0.387 | 0.9155 / 0.8925 |
-| RL-3 p3hist_both | 0.9060 / 0.8852 / 0.337 | 0.9080 / 0.8881 / 0.350 | 0.9132 / 0.8931 / 0.393 | 0.9140 / 0.8933 |
+| p3_aux_policy (reference) | 0.8627 / 0.8433 / 0.254 | – | – | – |
+| p3hist_none_policy | 0.8578 / 0.8386 / 0.258 | 0.8884 / 0.8661 / 0.375 | 0.8920 / 0.8709 / 0.373 | – |
+| p3hist_ego_policy | 0.8603 / 0.8416 / 0.242 | 0.8899 / 0.8688 / 0.369 | 0.8939 / 0.8752 / 0.362 | – |
+| p3hist_prev_policy | 0.8537 / 0.8346 / 0.236 | 0.8836 / 0.8615 / 0.374 | 0.8943 / 0.8751 / 0.365 | – |
+| p3hist_both_policy | 0.8527 / 0.8337 / 0.227 | 0.8811 / 0.8624 / 0.339 | 0.8916 / 0.8730 / 0.361 | – |
+| RL-3 from p3_aux_policy (rl3_b0.005, reference) | 0.9143 / 0.8920 / 0.365 | 0.9178 / – / 0.412 | **0.9189 / 0.8965 / 0.419** | **0.9193** / 0.8958 |
+| RL-3 p3hist_none | 0.9088 / 0.8855 / 0.324 | 0.9123 / 0.8872 / 0.403 | 0.9130 / 0.8913 / 0.384 | 0.9130 / 0.8904 |
+| RL-3 p3hist_ego | 0.9113 / 0.8897 / 0.355 | 0.9139 / 0.8924 / 0.408 | 0.9150 / 0.8932 / **0.418** | 0.9151 / 0.8943 |
+| RL-3 p3hist_prev | 0.9089 / 0.8849 / 0.318 | 0.9120 / 0.8882 / 0.391 | 0.9147 / 0.8926 / 0.387 | 0.9155 / 0.8925 |
+| RL-3 p3hist_both | 0.9076 / 0.8852 / 0.337 | 0.9096 / 0.8881 / 0.350 | 0.9132 / 0.8931 / 0.393 | 0.9140 / 0.8933 |
 
 navhard stages (control scorer, k = 256): RL-3 none 0.752 / 0.509, ego 0.775 / 0.531, prev 0.764 / 0.507, both 0.770 /
 0.506; reference 0.774 / 0.534. navtest EC: policy models 0.80-0.82, RL-3 models 0.77-0.79 (reference 0.78).
@@ -436,8 +524,8 @@ navtest v2, per scene (paired, n = 12,146), history variant minus none, same sco
     reference, is 0.005-0.0065 below it on navtest v2 (3-4 SE) and 0.035 below on navhard (control). That gap is
     run-to-run variation (another phase-1 / phase-3 run of the same recipe), and it is as large as the ego effect.
     RL-3 ego lands between the two (−0.0015 to −0.0033 vs the reference, 1-2 SE; navhard 0.418 vs 0.419). With one run
-    per variant, "ego history +0.004" is suggestive but not conclusive; the reference remains the best model (v1 0.9180
-    with the pairwise scorer, v2 0.8965 with the control scorer, navhard 0.419; with EC-aware selection 0.9027 / 0.441).
+    per variant, "ego history +0.004" is suggestive but not conclusive; the reference remains the best model (v1 0.9193
+    with the pairwise scorer (v1 comfort), v2 0.8965 with the control scorer, navhard 0.419; with EC-aware selection 0.9027 / 0.441).
 35. The navtrain val ranking after RL-3 (ego = none, shortlist 0.8476 vs 0.8478) did not show the navtest ego gain;
     val has no EC and no DDC / TLC / LK, and its differences are of the same size as the noise.
 
@@ -595,6 +683,16 @@ synthetic scenes with Gaussian weights exp(−d²/0.2) on the distance d between
 each synthetic scene's start (σ ≈ 0.32 m), so in practice the synthetic scene that starts nearest to where the stage-one
 plan ends; combined = mean over groups of stage one × stage two. The stage-one plan therefore decides which stage-two
 scenes count, and the combined score rests on ~450 groups.
+Why every frame comes in a pair: the two-frame extended comfort (EC, weight 2 of 16 in EPDMS) compares the plan at a
+frame with the plan at the frame 0.5 s earlier, so each group holds a "now" frame and its "previous" frame, and the
+stage-two synthetic scenes are also now / previous pairs (2,731 pairs = 5,462 frames; the synthetic now frames follow up
+the real now frame, the synthetic previous frames the real previous frame). EC is computed once per pair, from the two
+plans, and assigned to both frames (`SceneAggregator.aggregate_scores`); all other sub-scores are per frame. The
+previous frame is therefore also a full stage-one scene with its own stage-two follow-ups: group score = (now × its
+weighted stage two + previous × its weighted stage two) / 2. Every frame is predicted independently (the model does not
+see its earlier plan; EC only compares the two outputs, which is what the EC rule exploits at test time). This is the
+benchmark's structure, the same for every model with or without EC in training or selection: 450 + 5,462 = 5,912
+predictions. Only v1 PDMS (no EC) would need single frames.
 
 39. **Mixture + EC rule is the best navtest rule: v2 0.9079** for rl3_b0.005 (n 64; n 16 0.9055), +0.0052 ± 0.0012 over
     argmax + EC rule (0.9027) and +0.0114 ± 0.0007 over mixture alone, with EC 0.917 and EP 0.889 (argmax + rule 0.915 /
@@ -704,6 +802,90 @@ navhard shortlist + EC rule n 64, rebuilt aggregation with a paired bootstrap ov
     0.456 (ecshort w 4 seed 0, pickle ready); choosing it among four runs on the public navhard split is a selection on
     the test set, so for the thesis report the mean and spread; for the leaderboard any of the four is legitimate as
     a single submission.
+48. **Noise thresholds (from the two seeds).** navhard, two training runs with one seed each (different recipes, or
+    the same recipe with another seed): the same recipe moved by +0.0127 (rl3_b0.005) and −0.0118 (ecshort w 4) under
+    shortlist + EC rule n 64, so the SD of a single-seed difference is ≈ 0.012 (bootstrap over the 225 groups:
+    0.008-0.012) and a difference needs ≳ 0.025 to be ~95% real; with the mean of 2 seeds per recipe ≈ 0.017. The seed
+    shifts every rule of a model together (rl3_b0.005 seed 1 is +0.006 to +0.019 under all 8 rules), so it is one
+    offset per trained model. Selection rules on the same model are compared paired on the same predictions and are
+    much more precise: paired SE 0.002-0.005 for close shortlist-based rules (e.g. shortlist + EC n 64 vs shortlist
+    +0.022 / +0.029, SE 0.004-0.005), up to 0.016 against argmax; shortlist base vs mixture base (both + EC n 64, −0.006,
+    SE ≈ 0.013) is not resolved. navtest v2 is ~10× quieter: all seed-to-seed differences ≤ 0.0016 (SD ≈ 0.001,
+    threshold ≈ 0.002-0.003). Caveat: the navhard seed SD rests on two replicate pairs, so the threshold itself is
+    uncertain by a factor of ~2 or more.
+
+### Inference speed and GPU memory (2026-11-17)
+
+`scripts/evaluation/benchmark_vision_llm_lora_inference.py` (job 15175731, `exp/benchmark/`; a first run, 15175729,
+gave the policy rows within ~7%): one A100-SXM4-40GB, bf16 autocast, eval mode, real cached inputs (64 navtrain-val
+scenes), 10 warm-up + 50 timed iterations per batch size. Policy = rl3_b0.005 ep 1; scorer = p3_aux_policy ep 3 (its
+sub-score heads feed shortlist / mixture; same architecture, same timings within 1%).
+
+| Batch | Latency per batch (p99) | Scenes/s | Vision tower | LLM | Peak allocated |
+|---|---|---|---|---|---|
+| 1 | 175 ms (194) | 5.7 | 38 ms | 134 ms | 9.2 GB |
+| 2 | 178 ms (182) | 11.2 | 42 ms | 134 ms | 9.2 GB |
+| 4 | 204 ms (205) | 19.6 | 57 ms | 145 ms | 9.4 GB |
+| 8 | 379 ms (390) | 21.1 | 101 ms | 276 ms | 9.7 GB |
+| 16 | 729-743 ms | 21.5-21.9 | 191-196 ms | 535-543 ms | 10.3 GB |
+| 32 | 1.41 s | 22.7 | 371 ms | 1.03 s | 11.4 GB |
+| 64 | 2.74 s | 23.3 | 729 ms | 2.01 s | 13.8 GB |
+
+Weights 8.9 GB per model (CUDA context ~0.5 GB more in nvidia-smi). Selection over the 16,384 entries: argmax
+0.007 ms, shortlist k 256 0.40 ms, mixture 0.32 ms. CPU input preparation per scene (median, one process, 50 navtest
+scenes): reading + decoding the 6 camera JPEGs 174 ms, feature building (crop, resize, prompt) 20 ms.
+
+49. **Real-time budget at batch 1 (one A100, sequential):** argmax ≈ 195 ms (feature building + policy; 5 Hz),
+    shortlist / mixture ≈ 370 ms (+ scorer forward; 2.7 Hz); +174 ms when the inputs come from JPEG files instead of
+    camera frames. Both fit NAVSIM's 2 Hz (500 ms; shortlist / mixture with JPEG decoding only if decoding overlaps the
+    previous frame's GPU work), none fits 10 Hz (the LLM alone takes 134 ms). The LLM is ~77% of the forward, the
+    vision tower ~22%. The EC rule's comfort check (≤ 64 candidates against the previous plan) was not timed.
+50. **Batching:** batch 2 costs about the same as batch 1 (178 vs 175 ms) and throughput saturates at ~21-23 scenes/s
+    from batch 8, so the GPU is under-used at batch 1. Policy and scorer share the frozen Qwen base and differ only in
+    LoRA adapters and heads: one base with two adapters saves memory (~9 GB instead of ~18 GB) but not time, since
+    different LoRA weights in every adapted layer still need two forward passes. Only running the two as one batch-2
+    forward with a different adapter per sample could bring shortlist / mixture near ~180 ms (estimate from the
+    batch-2 latency; mixed-adapter batching is not implemented or measured).
+    Memory is no constraint: 9.2 GB at batch 1, 13.8 GB at batch 64.
+
+### Choosing the selection rule on the warmup split (2026-11-17)
+
+The public `warmup_two_stage` split (8 scene groups = 16 stage-one frames (now + previous, 0.5 s apart) and 204
+synthetic frames in 102 now / previous pairs, i.e. 220 predictions = 3.7% of navhard's 5,912 (groups 3.6%, stage one
+3.6%, stage two 3.7%; 12.8 synthetic pairs per group vs 12.1); meant for checking a submission before the leaderboard) is a subset of navhard: all 16 stage-one tokens, all 204 synthetic tokens and the 7
+logs are in `navhard_two_stage`. So its scores can be read from the navhard runs, and a rule chosen on it has seen 8 of
+the 225 navhard groups. `exp/headroom/rule_choice_subsets.py` rebuilds the per-group combined score as the official
+aggregation does (rebuilt totals equal the official ones to 4 decimals) for 8 rules on rl3_b0.005 (EC rule: control
+scorer, as all EC-rule runs).
+
+| Rule | navhard seed 0 | warmup seed 0 | navhard seed 1 | warmup seed 1 |
+|---|---|---|---|---|
+| argmax | 0.365 | 0.358 | 0.378 | 0.389 |
+| shortlist k 256 | 0.419 | 0.439 | 0.425 | 0.505 |
+| EC rule n 16 / 64, argmax base | 0.391 / 0.394 | 0.388 / 0.428 | 0.403 / 0.410 | 0.425 / 0.426 |
+| EC rule n 16 / 64, shortlist base | 0.437 / **0.441** | 0.446 / **0.452** | 0.447 / **0.454** | 0.518 / **0.525** |
+| EC rule n 16 / 64, mixture base | 0.426 / 0.435 | 0.389 / 0.401 | 0.445 / 0.447 | 0.510 / 0.512 |
+
+Random subsets of k groups (20,000 draws; seed 0 / seed 1): how often the subset's best rule is the navhard best, and
+the mean loss on navhard when it is not.
+
+| k groups | picks the navhard best | mean loss | P(loss > 0.01) |
+|---|---|---|---|
+| 8 | 36% / 35% | 0.011 / 0.011 | 26% / 17% |
+| 16 | 41% / 44% | 0.008 / 0.008 | 19% / 10% |
+| 32 | 45% / 50% | 0.005 / 0.005 | 10% / 4% |
+| 112 (split half) | 65% / 69% | 0.002 / 0.002 | 0% / 0% |
+
+46. **The warmup split picks the rule that is best on all of navhard, in both seeds: shortlist k 256 + EC rule n 64.**
+    Protocol for the thesis: choose the rule on warmup (as the benchmark allows), report navhard. Without the 8 warmup
+    groups (217 groups) the chosen rule scores 0.4407 / 0.4512 (seeds 0 / 1; all 225: 0.4411 / 0.4538), so the overlap
+    does not inflate the result.
+47. **8 groups are noisy for close rules.** A random 8-group subset picks the navhard-best rule only ~35% of the time;
+    the misses are mostly the next rules (mixture base n 64: −0.006, shortlist base n 16: −0.004 to −0.007), so the mean
+    loss is 0.011; the two most-picked rules are shortlist base n 64 and mixture base n 64 (64% / 62% of the picks
+    together). The warmup agreement is therefore partly luck for the top-2 ordering
+    (paired SE over 8 groups: 0.013-0.015 for shortlist base n 16, 0.064-0.073 for mixture base n 64); the gains of the
+    EC rule and of the shortlist over argmax are established on all 225 groups (SE 0.002-0.016).
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 
@@ -715,30 +897,33 @@ scripts. 0 failed scenes in every run (navtest 12,146 / navhard 5,912). Jobs: GP
 `pdm_navtest/<model>_<selection>[_k<k>|_lam10]_non_reactive_split/`, `pdm_navhard_two_stage/<model>_<selection>…_reactive_split/`
 (p3_aux_policy k = 256 navhard: `…_split_cpu4_fastload/`).
 
-| Model | Aux | Selection | **v1 PDMS** navtest | **v2 EPDMS** navtest | **v2 EPDMS** navhard | navhard stage 1 / stage 2 | v2 EC | v2 scored 0 |
+| Model | Aux | Selection | **v1 PDMS** navtest (v1 comfort) | **v2 EPDMS** navtest | **v2 EPDMS** navhard | navhard stage 1 / stage 2 | v2 EC | v2 scored 0 |
 |---|---|---|---|---|---|---|---|---|
-| p3_policy ep 7 | – | argmax | 0.793 | 0.775 | 0.189 | 0.569 / 0.317 | 0.804 | 16.3% |
-| p3_heads ep 5 | – | heads | 0.882 | 0.804 | 0.342 | 0.700 / 0.480 | 0.217 | 5.3% |
-| p3_aux ep 5 | ✓ | heads | 0.889 | 0.812 | 0.363 | 0.696 / 0.509 | 0.229 | 4.8% |
-| p3_combo_balanced ep 8 | – | argmax | 0.831 | 0.814 | 0.189 | 0.611 / 0.321 | 0.815 | 12.1% |
-| p3_combo_balanced_aux ep 9 | ✓ | heads | 0.863 | 0.787 | 0.300 | 0.656 / 0.450 | 0.172 | 5.5% |
-| p3_combo_balanced_aux ep 9 | ✓ | argmax | 0.841 | 0.824 | 0.214 | 0.639 / 0.340 | 0.818 | 11.1% |
-| p3_combo_balanced_aux ep 9 | ✓ | shortlist k = 64 | 0.873 | 0.838 | 0.322 | 0.675 / 0.467 | 0.608 | 5.3% |
-| p3_combo_balanced_aux ep 9 | ✓ | shortlist k = 256 | 0.872 | 0.845 | 0.317 | 0.675 / 0.462 | 0.695 | 5.8% |
-| p3_combo_balanced_aux ep 9 | ✓ | mixture λ = 10 | 0.867 | 0.847 | 0.250 | 0.662 / 0.386 | 0.808 | 8.2% |
-| p3_heads_policy ep 2 | – | shortlist k = 64 | 0.886 | 0.853 | 0.359 | 0.722 / 0.483 | 0.668 | 5.4% |
-| p3_aux_policy ep 3 | ✓ | argmax | 0.861 | 0.843 | 0.254 | 0.664 / 0.374 | 0.815 | 9.0% |
-| p3_aux_policy ep 3 | ✓ | shortlist k = 64 | 0.892 | 0.861 | 0.375 | 0.723 / 0.504 | 0.684 | 4.8% |
+| p3_policy ep 7 | – | argmax | 0.794 | 0.775 | 0.189 | 0.569 / 0.317 | 0.804 | 16.3% |
+| p3_heads ep 5 | – | heads | 0.871 | 0.804 | 0.342 | 0.700 / 0.480 | 0.217 | 5.3% |
+| p3_aux ep 5 | ✓ | heads | 0.879 | 0.812 | 0.363 | 0.696 / 0.509 | 0.229 | 4.8% |
+| p3_combo_balanced ep 8 | – | argmax | 0.833 | 0.814 | 0.189 | 0.611 / 0.321 | 0.815 | 12.1% |
+| p3_combo_balanced_aux ep 9 | ✓ | heads | 0.852 | 0.787 | 0.300 | 0.656 / 0.450 | 0.172 | 5.5% |
+| p3_combo_balanced_aux ep 9 | ✓ | argmax | 0.843 | 0.824 | 0.214 | 0.639 / 0.340 | 0.818 | 11.1% |
+| p3_combo_balanced_aux ep 9 | ✓ | shortlist k = 64 | 0.867 | 0.838 | 0.322 | 0.675 / 0.467 | 0.608 | 5.3% |
+| p3_combo_balanced_aux ep 9 | ✓ | shortlist k = 256 | 0.869 | 0.845 | 0.317 | 0.675 / 0.462 | 0.695 | 5.8% |
+| p3_combo_balanced_aux ep 9 | ✓ | mixture λ = 10 | 0.869 | 0.847 | 0.250 | 0.662 / 0.386 | 0.808 | 8.2% |
+| p3_heads_policy ep 2 | – | shortlist k = 64 | 0.885 | 0.853 | 0.359 | 0.722 / 0.483 | 0.668 | 5.4% |
+| p3_aux_policy ep 3 | ✓ | argmax | 0.863 | 0.843 | 0.254 | 0.664 / 0.374 | 0.815 | 9.0% |
+| p3_aux_policy ep 3 | ✓ | shortlist k = 64 | 0.891 | 0.861 | 0.375 | 0.723 / 0.504 | 0.684 | 4.8% |
 | p3_aux_policy ep 3 | ✓ | shortlist k = 256 | 0.892 | 0.867 | **0.386** | 0.737 / 0.517 | 0.756 | 4.9% |
 | **p3_aux_policy ep 3 + RL β = 0.02** | ✓ | **shortlist k = 256** | **0.899** | **0.872** | 0.383 | **0.741** / 0.509 | 0.742 | **4.5%** |
 | p3_aux_policy ep 3 + RL β = 0.005 | ✓ | shortlist k = 256 | 0.898 | 0.870 | 0.385 | 0.741 / 0.503 | 0.727 | 4.8% |
 
 v1 from the `_v1` variant of the selection (`score_heads_v1`, `shortlist_v1`, `mixture_v1`; argmax: the same run), v2
-and navhard from the v2 variant.
+and navhard from the v2 variant. v1 with the v1 comfort term (2026-11-18); the heads rows lose 0.010-0.011 against the
+HC version (0.882 / 0.889 / 0.863), so the policy head is now clearly better on v1 too (findings 51-52). The v1 column
+of the paired table below is the HC version; the v1-comfort pairs are in section "v1 PDMS with the v1 comfort term for
+every model".
 
 Paired differences on navtest (12,146 scenes, mean ± standard error):
 
-| Comparison | v2 | v1 |
+| Comparison | v2 | v1 (HC version) |
 |---|---|---|
 | RL β = 0.02 − p3_aux_policy (k = 256) | +0.0047 ± 0.0011 | +0.0073 ± 0.0012 |
 | RL β = 0.005 − p3_aux_policy (k = 256) | +0.0025 ± 0.0014 | +0.0064 ± 0.0014 |
