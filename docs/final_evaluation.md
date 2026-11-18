@@ -439,6 +439,7 @@ these values; older sections (combined pipeline, selection rules 2026-11-06, abl
 | + RL-3 β 0.005 + EC reward w 2 / w 4 | argmax | 0.995 / 0.994 | **0.9095** / 0.9051 | 0.9076 / 0.9032 | +0.0019 |
 | + RL-3 β 0.005 + EC reward, shortlist previous plan, w 2 / w 4 | argmax | 0.993 / 0.994 | **0.9098** / 0.9047 | 0.9082 / 0.9029 | +0.0016 / +0.0018 |
 | | w 4, seed 1, argmax | 0.994 | 0.9052 | 0.9035 | +0.0017 |
+| + RL-3 β 0.005, seed 1 / EC reward w 2 (own heads, 2026-11-18) | mixture_v1 λ 10 | – | 0.9171 / 0.9118 | 0.9155 / 0.9100 | +0.0016 / +0.0018 |
 | p3_heads_policy ep 2 + RL-3 β 0.005 | argmax | 0.994 | **0.9017** | 0.9001 | +0.0016 |
 | | shortlist_v1 k 256 | 0.981 | 0.8996 | 0.8997 | −0.0001 |
 | | mixture_v1 λ 10 | 0.993 | **0.9058** | 0.9042 | +0.0016 |
@@ -812,7 +813,8 @@ navhard shortlist + EC rule n 64, rebuilt aggregation with a paired bootstrap ov
     +0.022 / +0.029, SE 0.004-0.005), up to 0.016 against argmax; shortlist base vs mixture base (both + EC n 64, −0.006,
     SE ≈ 0.013) is not resolved. navtest v2 is ~10× quieter: all seed-to-seed differences ≤ 0.0016 (SD ≈ 0.001,
     threshold ≈ 0.002-0.003). Caveat: the navhard seed SD rests on two replicate pairs, so the threshold itself is
-    uncertain by a factor of ~2 or more.
+    uncertain by a factor of ~2 or more. **Updated by finding 56 (5-6 seeds, 2026-11-18):** navhard shortlist SD 0.006
+    (threshold ≈ 0.017), with the EC rule 0.009-0.014 (≈ 0.025-0.04); navtest v2 SD 0.0011-0.0018 (≈ 0.004-0.005).
 
 ### Inference speed and GPU memory (2026-11-17)
 
@@ -886,6 +888,100 @@ the mean loss on navhard when it is not.
     together). The warmup agreement is therefore partly luck for the top-2 ordering
     (paired SE over 8 groups: 0.013-0.015 for shortlist base n 16, 0.064-0.073 for mixture base n 64); the gains of the
     EC rule and of the shortlist over argmax are established on all 225 groups (SE 0.002-0.016).
+
+### RL-3 with the GRPO objective (2026-11-18, partly evaluated)
+
+Runs: experiments.md "RL-3 with the GRPO objective". Six runs `rl3_grpo_b{0.05,0.02,0.005}` (std-normalized group
+advantage) and `rl3_drgrpo_b…` (no std division), G = 32, otherwise exactly the exact-objective `rl3_b<β>` (seed 0).
+All six trainings completed (2 h 21-24 min each, as the exact runs). Evaluation with the start model's own heads
+(`SCORES_PRED=p3_aux_policy_ep03`); 12 of the 42 scoring jobs hit the 30 / 50 min limit (section "Seeds of rl3_b0.005"
+below; resubmission `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`), so some cells are still empty (–). Numbers:
+`exp/rl3_logs/collect_grpo_seeds.py`. Val = the last validation (end of epoch 2, 18,179 navtrain-val scenes; W&B
+summaries), same columns as experiments.md "RL-3 / RL-4".
+
+Val proxy (start p3_aux_policy ep 3: argmax 0.7888, E_π[r] 0.7166, argmax = 0 13.2%):
+
+| β | Objective | val argmax | E_π[r] | argmax = 0 | KL to start | entropy |
+|---|---|---|---|---|---|---|
+| 0.05 | exact | 0.8466 | 0.8187 | 7.4% | 0.66 | – |
+| | Dr. GRPO | 0.8460 | 0.8182 | 7.3% | 0.68 | 4.06 |
+| | GRPO | 0.7832 | 0.7755 | 17.0% | 7.97 | 2.27 |
+| 0.02 | exact | 0.8533 | 0.8345 | 7.0% | 1.17 | – |
+| | Dr. GRPO | 0.8505 | 0.8313 | 7.1% | 1.17 | 3.71 |
+| | GRPO | 0.7701 | 0.7628 | 18.3% | 10.36 | 2.02 |
+| 0.005 | exact (seed 0; seeds 1-5: 0.8542-0.8577, KL 2.64-3.15) | 0.8548 | 0.8455 | 6.6% | 3.06 | 3.05-3.12 |
+| | Dr. GRPO | 0.8579 | 0.8463 | 6.2% | 2.87 | 3.15 |
+| | GRPO | 0.7616 | 0.7571 | 19.2% | 12.73 | 1.75 |
+
+Official (navtest v2 EPDMS; v1 = v1 PDMS with the v1 comfort term; navhard combined (stage one / stage two)):
+
+| β | Objective | navtest argmax (EC, scored 0) | shortlist k 256 | mixture λ 10 | v1 argmax / shortlist_v1 / mixture_v1 | navhard argmax | navhard shortlist k 256 |
+|---|---|---|---|---|---|---|---|
+| 0.05 | exact | 0.893 (0.829) | 0.880 | – | 0.9106 / 0.9063 / 0.9133 | 0.351 | 0.405 |
+| | Dr. GRPO | 0.8902 (0.829, 4.3%) | 0.8802 | – | 0.9084 / – / – | – | – |
+| | GRPO | 0.8058 (0.635, 13.7%) | 0.8477 | – | 0.8528 / 0.8883 / – | – | – |
+| 0.02 | exact | 0.8950 (0.821) | 0.881 | 0.8944 | 0.9138 / 0.9088 / 0.9151 | 0.335 | 0.413 |
+| | Dr. GRPO | 0.8946 (0.815, 3.9%) | 0.8821 | 0.8934 | 0.9141 / 0.9074 / 0.9155 | 0.358 (0.782 / 0.454) | 0.400 (0.759 / 0.520) |
+| | GRPO | – | – | 0.8125 (EC 0.573) | – / – / 0.8663 | 0.242 (0.611 / 0.375) | 0.355 (0.702 / 0.494) |
+| 0.005 | exact, mean ± SD of 5-6 seeds | 0.8915 ± 0.0018 (0.779) | 0.8814 ± 0.0011 | 0.8936 ± 0.0015 | 0.9139 / 0.9097 / 0.9169 (SD ≤ 0.001) | 0.368 ± 0.009 | 0.413 ± 0.006 (0.764 / 0.533) |
+| | Dr. GRPO | 0.8924 (0.783, 3.9%) | 0.8809 | 0.8939 | 0.9139 / 0.9089 / 0.9159 | 0.350 (0.751 / 0.461) | 0.393 (0.755 / 0.516) |
+| | GRPO | 0.7750 (0.488, 15.6%) | 0.8333 | 0.8026 | 0.8347 / 0.8849 / 0.8609 | 0.215 (0.565 / 0.365) | 0.349 (0.689 / 0.491) |
+
+53. **Standard GRPO fails in RL-3; the std normalization is the cause.** At every β it leaves the start policy far
+    behind (KL 8-13 vs 0.7-3 for the exact objective), its val argmax ends *below* the start (0.76-0.78 vs 0.789) with
+    17-19% zero-score picks, and lower β makes it worse. Officially it loses 0.09-0.12 on navtest argmax (0.775-0.806
+    vs 0.89), EC falls to 0.49-0.64 and 14-16% of scenes score 0; navhard argmax drops to 0.22-0.24. The scorer repairs
+    part of it (shortlist k 256: 0.833-0.848 navtest, 0.35 navhard) but not all. LIKELY mechanism: dividing by the
+    group's reward SD gives every group advantages of size ~1, so groups whose 32 samples have almost equal rewards
+    (most navtrain scenes, rewards near 1) get their tiny, mostly noise differences blown up to the same weight as
+    informative groups, and the KL term, not rescaled, becomes β/SD times weaker. This is the same failure as on the
+    policy head alone (RL-1, checkpoint_evaluation.md finding 48), now larger because the LoRA can move further.
+54. **Dr. GRPO reproduces the exact objective on val and on navtest.** Val: within ±0.003 of the exact run at every β
+    with the same KL (0.68 / 1.17 / 2.87 vs 0.66 / 1.17 / 3.06), as expected (its gradient is an unbiased estimate of
+    the exact objective's, `test_rl_loss_terms_grpo`). navtest: β 0.005 is inside the exact seed range on argmax
+    (0.8924 vs 0.8886-0.8931), mixture (0.8939 vs 0.8936 ± 0.0015) and v1 argmax (0.9139); v1 mixture_v1 0.9159 is 1 SD
+    below. β 0.02 equals the exact run (argmax 0.8946 vs 0.8950, mixture 0.8934 vs 0.8944).
+55. **navhard: Dr. GRPO is lower with the shortlist** (β 0.005: 0.393 vs the exact 5-seed 0.413 ± 0.006, i.e. −3 SD;
+    β 0.02: 0.400 vs 0.413, one seed each), all in stage two (0.516-0.520 vs 0.533). navhard argmax is within ~2 SD
+    (0.350 vs 0.368 ± 0.009). One Dr. GRPO run per β, so this is suggestive, not established; a plausible reason is
+    the extra gradient noise of 32 samples per scene against the exact expectation over all 16,384 entries. The exact
+    objective stays the RL-3 objective of the thesis model: it is never worse and needs no sampling.
+
+### Seeds of rl3_b0.005: 6 trainings, spread of every metric (2026-11-18, partly evaluated)
+
+Six trainings of the same recipe (seed 0, 1 from before; seeds 2-5 run 2026-11-17, 2 h 21-24 min each, all
+completed; val argmax 0.8542-0.8579, KL 2.64-3.15). Own heads (`p3_aux_policy_ep03`) for every scorer-based rule. 27 of
+the 105 scoring jobs of this batch (seeds 2-5 and the own-scorer extras of seeds 0 / 1) hit their time limit (below), so n < 6 in most rows; the values are those that
+completed. `exp/rl3_logs/collect_grpo_seeds.py`.
+
+| Metric (rl3_b0.005, own heads) | n | mean | SD | range |
+|---|---|---|---|---|
+| navtest v2 argmax | 5 | 0.8915 | 0.0018 | 0.8886-0.8931 |
+| navtest v2 shortlist k 256 | 5 | 0.8814 | 0.0011 | 0.8801-0.8829 |
+| navtest v2 mixture λ 10 | 5 | 0.8936 | 0.0015 | 0.8916-0.8951 |
+| navtest v2 EC rule, mixture base n 64 (sequential) | 5 | **0.9059** | 0.0013 | 0.9040-0.9077 |
+| navtest v2 EC rule, argmax base n 64 / shortlist base n 64 | 5 / 5 | 0.9020 / 0.8926 | 0.0015 / 0.0009 | |
+| navtest v1 (v1 comfort) argmax | 5 | 0.9139 | 0.0005 | 0.9131-0.9143 |
+| navtest v1 (v1 comfort) shortlist_v1 k 256 | 6 | 0.9097 | 0.0008 | 0.9089-0.9110 |
+| navtest v1 (v1 comfort) mixture_v1 λ 10 | 6 | **0.9169** | 0.0010 | 0.9151-0.9178 |
+| navhard argmax | 5 | 0.368 | 0.009 | 0.355-0.378 |
+| navhard shortlist k 256 | 5 | 0.413 | 0.006 | 0.404-0.420 (stage one 0.764 ± 0.006, two 0.533 ± 0.006) |
+| navhard EC rule, shortlist base n 64 | 4 | **0.435** | 0.009 | 0.424-0.446 |
+| navhard EC rule, shortlist base n 16 / mixture base n 64 / mixture base n 16 | 4 / 4 / 5 | 0.430 / 0.421 / 0.415 | 0.009 / 0.013 / 0.014 | |
+
+56. **Seed spread with 5-6 seeds** (replaces the 2-pair estimate of finding 48). navhard shortlist k 256: SD 0.006, so
+    two single-seed runs differ by SD 0.0087 and need ≳ 0.017 to be ~95% real; with the EC rule on top the SD is
+    larger (0.009-0.014), threshold ≈ 0.025-0.04, which is where finding 48's 0.025 came from (it was measured with the
+    EC rule). navtest v2: SD 0.0011-0.0018 (argmax the largest, through EC 0.763-0.787), threshold for a single-seed
+    difference ≈ 0.004-0.005, about twice finding 48's estimate; navtest v1 is the quietest (SD 0.0005-0.0010,
+    threshold ≈ 0.002-0.003). Seed 0, the run all earlier comparisons used, is typical (within 1 SD everywhere except
+    the navtest shortlist rules, where it is the best seed: v2 k 256 +1.4 SD, v1 shortlist_v1 +1.6 SD, both ~+0.0013). The ordering of the rules is the same in
+    every seed that has both values: navtest mixture + EC n 64 > mixture > argmax > shortlist; navhard EC shortlist base
+    (n 16 ≈ n 64) > shortlist > argmax.
+57. **Scoring time limits.** Completed scoring jobs took 16-28 min (navtest) and 29-36 min (navhard) with 4 CPUs; the
+    30 / 50 min limits failed 43 jobs, all on six nodes (x1001c3s3b0n0, c4s0b0n0, c3s0b0n0, c0s0b0n0, c5s0b0n0,
+    c6s0b0n1) where 6-10 of these jobs started at once; they were 35-99% through (navtest seed 5 argmax: 12,124 of
+    12,146 scenes). Nothing failed in the code. Use 60 / 90 min for this job size.
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 

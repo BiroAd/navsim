@@ -741,8 +741,8 @@ accumulation 8. The trajectory-embedding head is smaller than the linear one.
 
 - v1 PDMS with the v1 comfort term (done 2026-11-18): all 61 own-scorer navtest v1 results recomputed (jobs
   15175655-15175716, `exp/v1_comfort_logs/`); final_evaluation.md section "v1 PDMS with the v1 comfort term for every
-  model". Still pending: own-heads mixture_v1 for RL-3 seed 1 and the EC-reward runs (15175717-15175728), and the v1
-  comfort of the GRPO and seed 2-5 runs (in their chains).
+  model". Own-heads mixture_v1 with v1 comfort: RL-3 seed 1 0.9171, EC reward w 2 0.9118; the scoring of ec4,
+  ecshort2, ecshort4 and ecshort4 seed 1 TIMEOUT (resubmission `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`).
 - PDMS evaluation (navtest v1, navhard v2) of the best phase 1 checkpoint: not run yet.
 - Sub-score selection at inference (combine predicted PDM sub-scores to pick the trajectory): not implemented; the
   `p1c_scores` run uses the heads only as an auxiliary loss.
@@ -943,6 +943,13 @@ with the own scorer (argmax / shortlist / mixture base, n 16 / 64; navtest seque
 for seeds 0 and 1 were added, so all six seeds are evaluated identically. Script `exp/rl3_logs/submit_rl3_seeds_2to5.sh`,
 job ids in `exp/rl3_logs/rl3_seeds_2to5_2026-11-17.txt` (trainings 15175909 / 36 / 62 / 88).
 
+Status 2026-11-18: all four trainings completed (2 h 21-24 min; end-of-training val argmax 0.8542-0.8577, KL
+2.64-3.15, entropy 3.08-3.12, i.e. seeds 1-5 within ±0.002 of each other on val). Predictions and EC selections all
+completed. 27 of the 105 scoring jobs of this batch TIMEOUT (limits 30 / 50 min; completed jobs took 16-28 / 29-36 min;
+all on six crowded nodes; final_evaluation.md finding 57), and the v1-comfort job of seed 5 argmax waits on one of them.
+Resubmission with 60 / 90 min: `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh` (not yet run). Results so far:
+final_evaluation.md section "Seeds of rl3_b0.005" (finding 56).
+
 ### RL-3 with the GRPO objective (submitted 2026-11-17)
 
 Question: does the sampled objective (GRPO) match or beat the exact objective once the LoRA trains (RL-3)? On the
@@ -956,6 +963,24 @@ model's own sub-score heads (`SCORES_PRED=p3_aux_policy_ep03`): navtest argmax, 
 mixture / mixture_v1 λ 10, and v1 PDMS with the real v1 comfort term (`v1_pdms_official_comfort.py`) for argmax,
 shortlist_v1 and mixture_v1; navhard argmax and shortlist k 256. Submission script `exp/rl3_logs/submit_rl3_grpo.sh`,
 job ids in `exp/rl3_logs/rl3_grpo_runs_2026-11-17.txt` (trainings 15175565 / 77 / 91 / 603 / 615 / 631).
+
+Status 2026-11-18: all six trainings completed (2 h 21-24 min). End-of-training val (18,179 scenes):
+
+| Run | val argmax | E_π[r] | argmax = 0 | KL | entropy | train argmax |
+|---|---|---|---|---|---|---|
+| `rl3_grpo_b0.05` | 0.7832 | 0.7755 | 17.0% | 7.97 | 2.27 | 0.901 |
+| `rl3_grpo_b0.02` | 0.7701 | 0.7628 | 18.3% | 10.36 | 2.02 | 0.886 |
+| `rl3_grpo_b0.005` | 0.7616 | 0.7571 | 19.2% | 12.73 | 1.75 | 0.876 |
+| `rl3_drgrpo_b0.05` | 0.8460 | 0.8182 | 7.3% | 0.68 | 4.06 | 0.920 |
+| `rl3_drgrpo_b0.02` | 0.8505 | 0.8313 | 7.1% | 1.17 | 3.71 | 0.924 |
+| `rl3_drgrpo_b0.005` | 0.8579 | 0.8463 | 6.2% | 2.87 | 3.15 | 0.926 |
+
+Standard GRPO ends below the start model on val (argmax 0.7888) with 6-12× the KL of the exact run at the same β; its
+train-val gap is larger (0.11-0.12 vs 0.07). Dr. GRPO equals the exact runs (0.8466 / 0.8533 / 0.8548, KL 0.66 / 1.17 /
+3.06). 12 of the 42 scoring jobs TIMEOUT (GRPO β 0.05 navtest mixture / mixture_v1 and both navhard, GRPO β 0.02 navtest
+argmax / shortlist / shortlist_v1, Dr. GRPO β 0.05 navtest shortlist_v1 / mixture / mixture_v1 and both navhard), and 5
+v1-comfort jobs wait on them; resubmission in `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh` (not yet run). Official
+results so far: final_evaluation.md section "RL-3 with the GRPO objective" (findings 53-55).
 
 ### RL-3 with two-frame extended comfort in the reward (submitted 2026-11-14)
 
