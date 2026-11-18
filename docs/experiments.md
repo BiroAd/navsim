@@ -741,8 +741,8 @@ accumulation 8. The trajectory-embedding head is smaller than the linear one.
 
 - v1 PDMS with the v1 comfort term (done 2026-11-18): all 61 own-scorer navtest v1 results recomputed (jobs
   15175655-15175716, `exp/v1_comfort_logs/`); final_evaluation.md section "v1 PDMS with the v1 comfort term for every
-  model". Own-heads mixture_v1 with v1 comfort: RL-3 seed 1 0.9171, EC reward w 2 0.9118; the scoring of ec4,
-  ecshort2, ecshort4 and ecshort4 seed 1 TIMEOUT (resubmission `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`).
+  model". Own-heads mixture_v1 with v1 comfort: RL-3 seed 1 0.9171, EC reward w 2 0.9118, w 4 0.9072, shortlist
+  previous plan w 2 / w 4 / w 4 seed 1 0.9120 / 0.9077 / 0.9075 (done; the last four after a resubmission).
 - PDMS evaluation (navtest v1, navhard v2) of the best phase 1 checkpoint: not run yet.
 - Sub-score selection at inference (combine predicted PDM sub-scores to pick the trajectory): not implemented; the
   `p1c_scores` run uses the heads only as an auxiliary loss.
@@ -947,8 +947,8 @@ Status 2026-11-18: all four trainings completed (2 h 21-24 min; end-of-training 
 2.64-3.15, entropy 3.08-3.12, i.e. seeds 1-5 within ±0.002 of each other on val). Predictions and EC selections all
 completed. 27 of the 105 scoring jobs of this batch TIMEOUT (limits 30 / 50 min; completed jobs took 16-28 / 29-36 min;
 all on six crowded nodes; final_evaluation.md finding 57), and the v1-comfort job of seed 5 argmax waits on one of them.
-Resubmission with 60 / 90 min: `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh` (not yet run). Results so far:
-final_evaluation.md section "Seeds of rl3_b0.005" (finding 56).
+Resubmitted with 60 / 90 min (`exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`, jobs 15199720-15199772): all
+completed. Results: final_evaluation.md section "Seeds of rl3_b0.005" (findings 56-57).
 
 ### RL-3 with the GRPO objective (submitted 2026-11-17)
 
@@ -979,8 +979,8 @@ Standard GRPO ends below the start model on val (argmax 0.7888) with 6-12× the 
 train-val gap is larger (0.11-0.12 vs 0.07). Dr. GRPO equals the exact runs (0.8466 / 0.8533 / 0.8548, KL 0.66 / 1.17 /
 3.06). 12 of the 42 scoring jobs TIMEOUT (GRPO β 0.05 navtest mixture / mixture_v1 and both navhard, GRPO β 0.02 navtest
 argmax / shortlist / shortlist_v1, Dr. GRPO β 0.05 navtest shortlist_v1 / mixture / mixture_v1 and both navhard), and 5
-v1-comfort jobs wait on them; resubmission in `exp/rl3_logs/resubmit_timeouts_2026-11-18.sh` (not yet run). Official
-results so far: final_evaluation.md section "RL-3 with the GRPO objective" (findings 53-55).
+v1-comfort jobs wait on them; resubmitted (`exp/rl3_logs/resubmit_timeouts_2026-11-18.sh`), all completed. Official
+results: final_evaluation.md section "RL-3 with the GRPO objective" (findings 53-55).
 
 ### RL-3 with two-frame extended comfort in the reward (submitted 2026-11-14)
 
