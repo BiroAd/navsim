@@ -1274,6 +1274,28 @@ then the offline val evaluation of every epoch, 15282266 (`eval_latest_run.sh`, 
 that the policy head shares. Phase 3 is therefore matched in everything but the loss, while phase 1 is shared. Script
 `exp/seed_aux_heads/submit_p3_imitation.sh`, log `p3_imitation_2026-11-20.txt`.
 
+### Official evaluation of stage 1: p1d_total ep 10 (submitted 2026-11-21 00:24)
+
+**Why.** p1d_total ep 10 is the start of every phase 3 model (p3_heads, p3_aux and their seeds; p3_imitation). It had
+only the offline val proxy (checkpoint_evaluation.md: argmax 0.698, head_all 0.753). Section 6.3 of the thesis needs
+one official row per training stage.
+
+**Jobs.**
+- GPU predictions 15282853 (`predictions/p1d_total_ep10`). Submitted directly with 16 CPUs / 64000M instead of the
+  script's 40G, because the checkpoint is a full 9.4 GB file and earlier predict jobs with 1.2 GB checkpoints already
+  peaked at 40G.
+- CPU scoring with `PRED=p1d_total_ep10 AFTER=15282853 SELECTIONS="argmax score_heads score_heads_v1"`
+  (`submit_vision_llm_lora_eval.sh`):
+  - navtest argmax (v1 + v2): 15282854;
+  - navtest score_heads (v2): 15282855;
+  - navtest score_heads_v1 (v1): 15282856;
+  - navhard score_heads: 15282857;
+  - navhard argmax: 15282858.
+- v1 comfort on argmax (15282859) and score_heads_v1 (15282860).
+
+**Setup.** Same selections, k and pipeline as the stage 2 official evaluation. Log
+`exp/seed_aux_heads/stage1_official_2026-11-21.txt`.
+
 ### RL-3 with the GRPO objective (submitted 2026-11-17)
 
 Question: does the sampled objective (GRPO) match or beat the exact objective once the LoRA trains (RL-3)? On the
