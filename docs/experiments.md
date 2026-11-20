@@ -952,6 +952,328 @@ valid scenes, no invalid navhard scenes. Results (6-seed mean ± SD, own heads):
 + EC n 64), navtest v1 0.9169 ± 0.0010 (mixture_v1), navhard 0.438 ± 0.011 (shortlist + EC n 64); final_evaluation.md
 section "Seeds of rl3_b0.005" (findings 56-57).
 
+### Seed replicates of p3_aux and p3_heads (started 2026-11-18)
+
+Question: is the aux-loss effect (p3_aux vs p3_heads, both from p1d_total ep 10) larger than the run-to-run spread,
+at stage 2 (heads) and after stage 3 (policy head)? Seeds 1, 2 and 3 for both models (seed 3 added the same evening,
+for 4 runs per model), so each seed gives a matched p3_aux / p3_heads pair (seed 0 = the existing runs). Work in `exp/seed_aux_heads/`.
+
+1. Stage 2 (phase 3; `submit_stage2.sh`, log `stage2_runs_2026-11-18.txt`): `p3_aux_s{1,2}` = the overrides of p3_aux
+   (job 14873887), `p3_heads_s{1,2}` = those of p3_heads (job 14863795), copied from the seed-0 runs'
+   `code/hydra/overrides.yaml`, plus `++seed=N` (N = 1, 2, 3). Checked: the argument lists equal seed 0's, and the Hydra config
+   composed with the current code differs from the seed-0 `config.yaml` only in `seed` and the per-job aux mount
+   path. Not checkable: code defaults outside the YAML (no code snapshot in the run folders; later flags default to
+   the old behaviour by convention). Environment as seed 0: batch 4 × accum 8 × 4 GPUs, 10 epochs, patience 3,
+   monitor `val/pdm_scores/head_score_gap`, 8 loader workers, `AUX_TARGETS=1` for p3_aux (aux 3 / 3 / 1). Resources
+   as seed 0, 40 CPUs / 156G / 16 h: the first submission with 8 CPUs / 32000M (15201792-95) was OOM-killed after
+   3 min, while the 4 ranks loaded the full 9.4 GB p1d_total checkpoint (seed-0 peak 35-37 GB per rank; newer
+   checkpoints hold only the trainable weights, 0.4-1.2 GB, which is why 32000M suffices for later runs). Jobs
+   15202212 (aux s1), 13 (heads s1), 14 (aux s2), 15 (heads s2), 15202261 (aux s3), 62 (heads s3).
+2. Stage 2 checkpoint choice as for seed 0: offline val evaluation (`eval_latest_run.sh` →
+   `eval_vision_llm_lora_checkpoints.py`, val only), best `head_all`; all saved epochs instead of seed 0's subsets
+   (p3_heads 2/4/5/8, p3_aux 2/4/5/6/8; both picked ep 5). Jobs 15202216-19 and 15202263/64 (afterok on the trainings). Never
+   chosen on navtest / navhard.
+3. Stage 3: `p3_aux_policy_sN` / `p3_heads_policy_sN` from the chosen stage 2 epoch, recipe of p3_aux_policy (policy
+   head only, score-aware labels, CE 1 / ED 1, traj LR 1.0, 4 epochs, patience 2, batch 8 × accum 4, monitor
+   `val/pdm_scores/argmax_score_gap`) + `++seed=N`; epoch by val argmax; merged checkpoints
+   (`merge_policy_only_checkpoint.py`).
+4. Val proxy of all 8 models (stage 2: head_all; stage 3: argmax, shortlist_256), then official: stage 2 score_heads
+   (navtest v2, navhard) and score_heads_v1 (navtest v1); stage 3 argmax and shortlist k 256 (navtest v2),
+   argmax and shortlist_v1 k 256 (v1), shortlist k 256 (navhard); v1 comfort for every v1 result. No EC rule, λ
+   sweeps, reactive traffic or RL.
+5. Analysis: per seed the paired aux − heads difference on every metric, mean ± SE over the 4 pairs, stage 2 seed SD
+   of each model (4 runs each).
+
+Status 2026-11-19: all 6 stage 2 trainings and their val evaluations COMPLETED without errors (trainings 8 h 55 min -
+12 h 28 min; stopped after epoch 7 (heads s3), 8 (s2 both) or 9). Val head_all (18,179 scenes) per epoch, best in
+brackets; the pick equals the training monitor's best epoch in every run:
+
+| Run | head_all by epoch (0 … last) | chosen | head_all | head_topk | shortlist_256 | argmax |
+|---|---|---|---|---|---|---|
+| p3_aux (seed 0) | ep 2/4/5/6/8: 0.8191 / 0.8236 / 0.8264 / 0.8220 / 0.8217 | ep 5 | 0.8264 | 0.8119 | – | 0.7472 |
+| p3_aux_s1 | 0.7907 0.8065 0.8168 0.8221 0.8243 0.8246 0.8263 0.8235 0.8233 0.8227 | ep 6 | 0.8263 | 0.8122 | 0.8218 | 0.7436 |
+| p3_aux_s2 | 0.7878 0.8087 0.8173 0.8197 0.8232 0.8276 0.8257 0.8220 0.8222 | ep 5 | 0.8276 | 0.8132 | 0.8213 | 0.7362 |
+| p3_aux_s3 | 0.7876 0.8083 0.8121 0.8183 0.8234 0.8232 0.8238 0.8234 0.8219 0.8201 | ep 6 | 0.8238 | 0.8121 | 0.8211 | 0.7363 |
+| p3_heads (seed 0) | ep 2/4/5/8: 0.8141 / 0.8150 / 0.8182 / 0.8138 | ep 5 | 0.8182 | 0.8032 | – | 0.7430 |
+| p3_heads_s1 | 0.7856 0.8003 0.8103 0.8145 0.8195 0.8179 0.8205 0.8156 0.8143 0.8135 | ep 6 | 0.8205 | 0.8060 | 0.8154 | 0.7364 |
+| p3_heads_s2 | 0.7796 0.8025 0.8113 0.8108 0.8122 0.8198 0.8173 0.8132 0.8140 | ep 5 | 0.8198 | 0.8029 | 0.8142 | 0.7352 |
+| p3_heads_s3 | 0.7835 0.8026 0.8059 0.8148 0.8194 0.8184 0.8160 0.8155 | ep 4 | 0.8194 | 0.8027 | 0.8150 | 0.7456 |
+
+Val head_all aux − heads per seed: +0.0082 / +0.0058 / +0.0078 / +0.0044 (seeds 0-3), mean +0.0066 ± 0.0009 (SE over the
+4 pairs); seed SD p3_aux 0.0016, p3_heads 0.0010.
+
+**Stage 2 official evaluation (2026-11-19, all 30 jobs COMPLETED, 0 resubmissions).** `submit_stage2_official.sh`, log
+`stage2_official_2026-11-19.txt`. Jobs:
+- GPU predict 15236358 / 64 / 69 / 75 / 80 / 85, each 20-21 min (11 CPUs / 40G; MemEff ~100 % of 40G).
+- CPU scoring 15236360-89:
+  - navtest `score_heads` and `score_heads_v1`: 17.8-21.5 min (4 CPUs / 8000M, CPU efficiency 76 %);
+  - navhard `score_heads`: 30.0-35.2 min (4 CPUs / 6G, 84 %).
+- v1 comfort 15236363 / 68 / 74 / 79 / 84 / 90: 9.4-12.4 min.
+
+0 failed scenes. The results and the paired analysis are in
+[final_evaluation.md](final_evaluation.md), section "Seed replicates of p3_aux and p3_heads". Collector:
+`exp/seed_aux_heads/collect_seed_study.py`.
+
+**Stage 3 trainings (2026-11-19, all 6 COMPLETED).** `submit_stage3.sh`, log `stage3_runs_2026-11-19.txt`, jobs
+15236401-06.
+- Setup: 12 CPUs / 48000M, nodes cn02, cn03 and x1001 nodes.
+- Config: the composed config differs from p3_aux_policy only in start checkpoint, experiment name and seed.
+- Run length: all 4 epochs ran (patience 2 never triggered), 1 h 38 min - 1 h 41 min each, ~24 min per epoch. Seed 0
+  took ~51 min per epoch (p3_aux_policy 2026-11-06, p3_heads_policy 2026-11-07) with the same trainer settings
+  (`max_epochs 4`, full train / val, val every epoch). The cause of the 2× speed-up was not checked (UNKNOWN). The
+  logs contain no errors, only the `fla` "Python 3.10 below 3.11" warning.
+- Two folders: p3_aux_policy_s2 has two run folders (2026.11.19.17.30.31 with the checkpoints, 17.30.32 with only a
+  log; the ranks started one second apart). The scripts take the folder with `checkpoints/epochs`.
+- Usage: CPU efficiency 44-49 %. sacct "memory utilized" 49-57 GB, which is above the 46.9 GB limit, but no job was
+  killed (the counter includes shared or cached pages).
+
+Val evaluations 15236408-13 (16 CPUs / 64000M, 1 h 03-06 min for 4 epochs; CPU efficiency 8 %, a GPU-bound job). Val
+(18,179 scenes) per epoch, argmax `sel_score` and shortlist_256 (k 256). head_all is constant within each run (frozen
+heads) and equals the chosen stage 2 epoch's value, which confirms each run started from its own stage 2 checkpoint.
+
+| Run (start) | argmax ep 0 / 1 / 2 / 3 | shortlist_256 ep 0 / 1 / 2 / 3 | chosen (val argmax) | training monitor best |
+|---|---|---|---|---|
+| p3_aux_policy (p3_aux ep 5) | – / 0.7879 / – / 0.7895 | – / 0.8283 / – / 0.8278 | ep 3 | ep 1 |
+| p3_aux_policy_s1 (p3_aux_s1 ep 6) | 0.7823 / **0.7876** / 0.7865 / 0.7870 | 0.8281 / 0.8290 / 0.8300 / 0.8290 | ep 1 | ep 3 |
+| p3_aux_policy_s2 (p3_aux_s2 ep 5) | 0.7814 / 0.7871 / **0.7880** / 0.7872 | 0.8289 / 0.8296 / 0.8309 / 0.8307 | ep 2 | ep 3 |
+| p3_aux_policy_s3 (p3_aux_s3 ep 6) | 0.7817 / 0.7867 / **0.7899** / 0.7897 | 0.8289 / 0.8294 / 0.8295 / 0.8297 | ep 2 | ep 3 |
+| p3_heads_policy (p3_heads ep 5) | – / – / 0.7772 / – | – / – / 0.8175 / – | ep 2 | ep 2 |
+| p3_heads_policy_s1 (p3_heads_s1 ep 6) | 0.7689 / 0.7727 / 0.7729 / **0.7733** | 0.8190 / 0.8200 / 0.8197 / 0.8198 | ep 3 | ep 2 |
+| p3_heads_policy_s2 (p3_heads_s2 ep 5) | 0.7735 / 0.7775 / **0.7787** / 0.7778 | 0.8203 / 0.8205 / 0.8217 / 0.8218 | ep 2 | ep 3 |
+| p3_heads_policy_s3 (p3_heads_s3 ep 4) | 0.7696 / 0.7724 / 0.7719 / **0.7734** | 0.8192 / 0.8195 / 0.8199 / 0.8200 | ep 3 | ep 3 |
+
+How the epochs were chosen:
+- Epochs 1-3 differ by ≤ 0.001 in val argmax, against a per-run SE of 0.0024. The val pick and the training
+  monitor's pick (lenient metric) agree in 2 of the 6 new runs.
+- Seed 0 was evaluated on only a subset of epochs: p3_aux_policy on ep 1 and 3 (val picked ep 3), p3_heads_policy on
+  ep 2 only (the monitor's pick). Its choice is therefore not a full val argmax over 4 epochs. Given the ≤ 0.001
+  spread between epochs, this matters little.
+
+Merged checkpoints (`merge_policy_only_checkpoint.py`, 2026-11-19 20:28-20:31, on the login node, ~1 min each):
+`<run>/checkpoints/merged/epoch-epoch=NN.ckpt`.
+- p3_aux runs: 686 keys from the stage 2 checkpoint, 5 replaced by the policy head.
+- p3_heads runs: 624 keys, 5 replaced.
+
+**Stage 3 official evaluation (submitted 2026-11-19 20:32).** `submit_stage3_official.sh`, log
+`stage3_official_2026-11-19.txt`, jobs 15239330-84.
+- GPU predict on the merged checkpoints, then navtest argmax (gives v1 and v2), shortlist k 256 and shortlist_v1
+  k 256; navhard argmax and shortlist k 256; v1 comfort on the argmax and shortlist_v1 k 256 results.
+- Seed 0's p3_heads_policy_ep02 had only shortlist k 64 results, so the same CPU jobs run on its saved predictions
+  (15239378-84, no GPU job).
+- Shortlist k 64 for the 6 new models, added at the user's request: navtest shortlist and shortlist_v1, navhard
+  shortlist, and v1 comfort on shortlist_v1. These are CPU jobs on the same predictions (`PRED=… AFTER=<GPU job>`),
+  15239483-506. Seed 0 already had k 64 for both models.
+- Status: all 79 jobs COMPLETED, 0 resubmissions (finished 2026-11-19 ~21:20).
+  - GPU predict: 17.9-19.1 min.
+  - navtest scoring: 15.4-31.6 min.
+  - navhard scoring: 29.2-44.6 min.
+  - v1 comfort: 7.9-10.8 min.
+
+  Results and paired analysis: [final_evaluation.md](final_evaluation.md), section "Seed replicates of p3_aux and
+  p3_heads", findings 59-64.
+
+### RL-3 on the seed 1-3 policy models: whole-pipeline replicates (submitted 2026-11-19 20:45)
+
+**Question.** How much does the full pipeline (phase 3 → policy stage → RL-3) vary when every stage gets a different
+seed? The 6 seeds of rl3_b0.005 all start from p3_aux_policy ep 3 (seed 0), so they measure only the RL-3 seed.
+
+**Runs.** `rl3_b0.005_pipe_s{1,2,3}` use the rl3_b0.005 recipe (exact objective, β 0.005, 2 epochs, batch 4 × accum
+8, monitor `val/rl/shortlist_256_gap`) with `++seed=N`. They start from the merged stage 3 checkpoints
+p3_aux_policy_s1 ep 1, s2 ep 2 and s3 ep 2. Seed 0 of the pipeline is rl3_b0.005_ep01, which gives 4 full-pipeline
+replicates.
+
+**Config check.** The composed config differs from `rl3_b0.005_s2`'s only in:
+- experiment name and seed;
+- start checkpoint;
+- `rl_reference_head_path` (the new model's fused-state cache);
+- the per-job /dev/shm reference path.
+
+**Chain per model.** Script `exp/rl3_logs/submit_rl3_pipeline.sh`, log `rl3_pipeline_runs_2026-11-19.txt`.
+1. Fused-state cache `rl_features/p3_aux_policy_sN_epNN`: 3 shards, 1 GPU each, 8 CPUs / 32000M / 50 min, as for
+   p3_aux_policy_ep03.
+2. RL-3 training: 12 CPUs / 46000M / 4 h. The rl3_b0.005 seeds ran with 32 CPUs at 14 % CPU efficiency.
+3. GPU predictions of epoch 1. These also wait for the start model's stage 3 official GPU job, whose predictions
+   serve as the own scorer.
+4. The evaluation chain of the rl3_b0.005 seeds (`submit_rl3_seeds_2to5.sh`), with the start model's own heads
+   (`SCORES_PRED` = `p3_aux_policy_sN_epNN`):
+   - navtest: argmax, shortlist k 256, shortlist_v1 k 256, mixture λ 10, mixture_v1 λ 10;
+   - v1 comfort on the three v1 results;
+   - navhard: argmax and shortlist k 256;
+   - EC rule (own scorer, argmax / shortlist / mixture base, n 16 / 64; navtest sequential and navhard).
+
+   Scoring limits are 60 / 90 min.
+
+| Run | cache | training | predict | scoring / v1 comfort / EC jobs |
+|---|---|---|---|---|
+| rl3_b0.005_pipe_s1 | 15239395-97 | 15239398 | 15239399 | 15239400-23 |
+| rl3_b0.005_pipe_s2 | 15239424-26 | 15239427 | 15239428 | 15239429-52 |
+| rl3_b0.005_pipe_s3 | 15239453-55 | 15239456 | 15239457 | 15239458-81 |
+
+**Status 2026-11-20: all 87 jobs completed (2 after a resubmission).**
+- Durations:
+  - caches 30-32 min;
+  - trainings 2 h 22-24 min (cn02, x1001c5s2b0n1, x1001c0s0b0n0);
+  - predictions 16-17 min;
+  - navtest scoring 15-21 min, navhard 29-34 min;
+  - EC selection 7-20 min;
+  - v1 comfort 8-33 min.
+- Run folders with checkpoints, used by the predictions:
+  - `rl3_b0.005_pipe_s1/2026.11.19.21.20.45`;
+  - `rl3_b0.005_pipe_s2/2026.11.19.21.19.06`;
+  - `rl3_b0.005_pipe_s3/2026.11.19.21.18.58`.
+
+  The extra empty timestamp folders next to them (s1: 1, s2: 2) are the known multi-rank artifact.
+- End-of-training val (W&B summary, epoch 1):
+  - argmax 0.8571 / 0.8576 / 0.8574;
+  - shortlist 256 0.8515 / 0.8514 / 0.8502;
+  - KL 2.63 / 2.79 / 2.65;
+  - entropy 3.16 / 3.06 / 3.10.
+
+  All are within the range of the 6 rl3_b0.005 seeds.
+- Two pipe_s3 jobs hit their time limit on stalled nodes, not because of the code:
+  - v1 comfort for mixture_v1 (15239467): empty log after 40 min on x1000c2s4b1n0, where pipe_s2's v1c jobs also took
+    23-33 min instead of ~9;
+  - navhard EC rule, argmax base n 64 (15239473): 48 min before scoring started on x1000c5s3b1n1, while its 11 sibling
+    jobs took ~30 min in total.
+
+  Both were resubmitted 2026-11-20 01:37 with the same settings, excluding the two nodes: 15247940 and 15247941 (logged
+  in `rl3_pipeline_runs_2026-11-19.txt`). Both completed, in 14 and 32 min.
+- Results: final_evaluation.md section "Whole-pipeline replicates of RL-3" (findings 65-68). The whole-pipeline spread
+  is not larger than the RL-seed spread. Thesis numbers over the 4 pipeline runs:
+  - navtest v2 0.9064 ± 0.0016 (mixture + EC n 64);
+  - navtest v1 0.9183 ± 0.0005 (mixture_v1);
+  - navhard 0.435 ± 0.007 (shortlist + EC n 64).
+
+**Val history** (navtrain val, 18,179 scenes; 4 checks per run at val_check_interval 0.5; read from each run's W&B
+binary `wandb/latest-run/*.wandb` by `exp/rl3_logs/dump_rl3_pipeline_full.py`; seed 0 = rl3_b0.005
+`2026.11.08.23.46.54`). The shortlist values use the start model's cached top-1024 heads shortlist; "argmax zero" =
+share of val scenes whose argmax scores 0; "changed" = share whose argmax differs from the start (reference) policy's argmax
+(`navsim/agents/vision_llm_lora/vision_llm_lora_rl.py:130-155`).
+
+| Run | step (epoch) | argmax | shortlist 256 | shortlist 64 | expected reward | KL | entropy | argmax zero | changed | val loss | expected ADE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed 0 | 332 (0) | 0.8255 | 0.8405 | 0.8383 | 0.8132 | 3.0840 | 3.3921 | 0.0870 | 0.9483 | -0.7978 | 1.4277 |
+| seed 0 | 664 (0) | 0.8440 | 0.8461 | 0.8414 | 0.8339 | 3.4493 | 3.1677 | 0.0668 | 0.9438 | -0.8166 | 1.4687 |
+| seed 0 | 997 (1) | 0.8505 | 0.8480 | 0.8433 | 0.8413 | 3.0289 | 3.0947 | 0.0702 | 0.9439 | -0.8262 | 1.3368 |
+| seed 0 | 1329 (1) | 0.8548 | 0.8506 | 0.8443 | 0.8455 | 3.0553 | 3.0766 | 0.0664 | 0.9403 | -0.8303 | 1.3501 |
+| pipe s1 | 332 (0) | 0.8256 | 0.8424 | 0.8387 | 0.8130 | 3.3542 | 3.5423 | 0.0816 | 0.9571 | -0.7963 | 1.5576 |
+| pipe s1 | 664 (0) | 0.8332 | 0.8431 | 0.8387 | 0.8207 | 2.7018 | 3.3693 | 0.0795 | 0.9447 | -0.8072 | 1.3232 |
+| pipe s1 | 997 (1) | 0.8525 | 0.8513 | 0.8428 | 0.8442 | 2.8758 | 3.1638 | 0.0667 | 0.9498 | -0.8298 | 1.3148 |
+| pipe s1 | 1329 (1) | 0.8571 | 0.8515 | 0.8431 | 0.8465 | 2.6289 | 3.1640 | 0.0673 | 0.9420 | -0.8333 | 1.2491 |
+| pipe s2 | 332 (0) | 0.8130 | 0.8372 | 0.8371 | 0.8017 | 3.8409 | 3.5059 | 0.0898 | 0.9651 | -0.7825 | 1.5902 |
+| pipe s2 | 664 (0) | 0.8388 | 0.8441 | 0.8406 | 0.8282 | 2.9533 | 3.2650 | 0.0774 | 0.9467 | -0.8134 | 1.3353 |
+| pipe s2 | 997 (1) | 0.8528 | 0.8486 | 0.8429 | 0.8426 | 2.6686 | 3.1173 | 0.0680 | 0.9376 | -0.8293 | 1.2318 |
+| pipe s2 | 1329 (1) | 0.8576 | 0.8514 | 0.8440 | 0.8464 | 2.7886 | 3.0642 | 0.0681 | 0.9410 | -0.8325 | 1.2476 |
+| pipe s3 | 332 (0) | 0.8320 | 0.8413 | 0.8416 | 0.8152 | 2.5701 | 3.6841 | 0.0761 | 0.9383 | -0.8023 | 1.3728 |
+| pipe s3 | 664 (0) | 0.8356 | 0.8444 | 0.8412 | 0.8222 | 2.8301 | 3.4028 | 0.0785 | 0.9498 | -0.8080 | 1.3177 |
+| pipe s3 | 997 (1) | 0.8508 | 0.8484 | 0.8449 | 0.8410 | 2.7363 | 3.1300 | 0.0731 | 0.9446 | -0.8273 | 1.2701 |
+| pipe s3 | 1329 (1) | 0.8574 | 0.8502 | 0.8452 | 0.8486 | 2.6545 | 3.1018 | 0.0661 | 0.9387 | -0.8353 | 1.2488 |
+
+- Every run improves monotonically on val argmax (0.813-0.832 → 0.855-0.858) and expected reward (0.802-0.815 →
+  0.846-0.849). The last check is the best on argmax in all four runs. The monitor `val/rl/shortlist_256_gap` is also
+  lowest at the last check, so the epoch 1 checkpoint is the monitor's choice as well.
+- KL to the reference ends at 2.63-3.06 and entropy at 3.06-3.16. The pipeline runs end with slightly lower KL than
+  seed 0 (2.63-2.79 vs 3.06).
+
+**Job accounting** (sacct; CPU efficiency = TotalCPU / (elapsed × CPUs)):
+
+| Run | Job type | jobs | state | elapsed (min) | CPUs | CPU efficiency | peak RSS / request | nodes | start → end (2026-11-19/20) |
+|---|---|---|---|---|---|---|---|---|---|
+| pipe s1 | fused-state cache (3 shards) | 15239395-97 (3) | 3 COMPLETED | 29.8-32.0 | 8 | 15-16% | 24.9G/31.2G of 32000M | x1001c0s0b0n1, x1001c0s1b0n1 | 11-19T20:45 → 11-19T21:17 |
+| pipe s1 | RL-3 training | 15239398 | 1 COMPLETED | 144.4 | 12 | 37% | 18.1G of 46000M | cn02 | 11-19T21:17 → 11-19T23:42 |
+| pipe s1 | GPU predictions | 15239399 | 1 COMPLETED | 16.2 | 11 | 34% | 40.0G of 40G | x1001c0s0b0n0 | 11-19T23:42 → 11-19T23:58 |
+| pipe s1 | navtest scoring | 15239400-22 (11) | 11 COMPLETED | 15.3-17.9 | 4 | 85-94% | 6.1G/6.4G/6.8G/7.8G of 8000M | x1000c2s2b1n1, x1000c5s5b0n0 | 11-19T23:58 → 11-20T00:34 |
+| pipe s1 | v1 comfort | 15239407-09 (3) | 3 COMPLETED | 8.4-9.5 | 4 | 87-94% | 7.8G of 8000M | x1000c2s3b0n1, x1000c5s5b0n0 | 11-20T00:14 → 11-20T00:24 |
+| pipe s1 | EC selection | 15239410-11 (2) | 2 COMPLETED | 7.0-18.0 | 9 | 68-87% | 11.5G/16.0G of 16G | x1000c5s5b0n0, x1000c6s0b0n0 | 11-19T23:58 → 11-20T00:16 |
+| pipe s1 | navhard scoring | 15239405-23 (8) | 8 COMPLETED | 28.9-30.5 | 4 | 83-84% | 6.0G of 6G | x1000c5s5b0n0, x1000c6s0b0n0 | 11-19T23:58 → 11-20T00:34 |
+| pipe s2 | fused-state cache (3 shards) | 15239424-26 (3) | 3 COMPLETED | 30.0-31.1 | 8 | 16% | 31.2G of 32000M | x1001c1s1b0n0, x1001c2s1b0n0, x1001c4s0b0n1 | 11-19T20:45 → 11-19T21:16 |
+| pipe s2 | RL-3 training | 15239427 | 1 COMPLETED | 142.0 | 12 | 38% | 18.1G of 46000M | x1001c5s2b0n1 | 11-19T21:16 → 11-19T23:38 |
+| pipe s2 | GPU predictions | 15239428 | 1 COMPLETED | 17.2 | 11 | 32% | 40.0G of 40G | x1001c0s0b0n0 | 11-19T23:38 → 11-19T23:56 |
+| pipe s2 | navtest scoring | 15239429-51 (11) | 11 COMPLETED | 15.6-18.7 | 4 | 83-94% | 7.0G/7.5G/7.8G of 8000M | 4 nodes | 11-19T23:56 → 11-20T00:33 |
+| pipe s2 | v1 comfort | 15239436-38 (3) | 3 COMPLETED | 12.4-33.0 | 4 | 55-81% | 7.8G of 8000M | x1000c2s4b1n0, x1000c7s4b0n0 | 11-20T00:13 → 11-20T00:47 |
+| pipe s2 | EC selection | 15239439-40 (2) | 2 COMPLETED | 7.1-18.6 | 9 | 69-81% | 16.0G of 16G | x1000c2s3b1n1 | 11-19T23:56 → 11-20T00:14 |
+| pipe s2 | navhard scoring | 15239434-52 (8) | 8 COMPLETED | 28.8-34.2 | 4 | 82-85% | 6.0G of 6G | 4 nodes | 11-19T23:56 → 11-20T00:37 |
+| pipe s3 | fused-state cache (3 shards) | 15239453-55 (3) | 3 COMPLETED | 30.1-30.6 | 8 | 15-16% | 31.2G of 32000M | x1001c5s1b0n1, x1001c5s2b0n1 | 11-19T20:45 → 11-19T21:16 |
+| pipe s3 | RL-3 training | 15239456 | 1 COMPLETED | 142.5 | 12 | 38% | 18.2G of 46000M | x1001c0s0b0n0 | 11-19T21:16 → 11-19T23:38 |
+| pipe s3 | GPU predictions | 15239457 | 1 COMPLETED | 17.2 | 11 | 34% | 40.0G of 40G | x1001c0s0b0n0 | 11-19T23:38 → 11-19T23:56 |
+| pipe s3 | navtest scoring | 15239458-80 (11) | 11 COMPLETED | 16.7-21.0 | 4 | 82-95% | 6.0G/6.1G/7.3G/7.8G of 8000M | 5 nodes | 11-19T23:56 → 11-20T00:37 |
+| pipe s3 | v1 comfort | 15239465-67 + 15247940 (4) | 3 COMPLETED, 1 TIMEOUT | 11.1-13.7 (timeout 40.4) | 4 | 58-79% | 7.8G of 8000M | x1000c0s0b0n1, x1000c2s4b1n0, x1000c3s0b1n1 | 11-20T00:13 → 11-20T01:51 |
+| pipe s3 | EC selection | 15239468-69 (2) | 2 COMPLETED | 7.1-20.4 | 9 | 70-83% | 16.0G of 16G | x1000c5s5b0n0 | 11-19T23:56 → 11-20T00:16 |
+| pipe s3 | navhard scoring | 15239463-81 + 15247941 (9) | 8 COMPLETED, 1 TIMEOUT | 29.7-32.3 (timeout 90.0) | 4 | 40-88% | 6.0G of 6G | 5 nodes | 11-19T23:56 → 11-20T02:09 |
+
+- Peak RSS equals the request for navhard scoring (6G), v1 comfort (8000M), EC selection (16G) and the GPU
+  predictions (40G). All of these completed, so the cap did not kill them. Whether page cache is counted toward the
+  cgroup RSS here is UNVERIFIED.
+- The fused-state caches used 15-16% of 8 CPUs; 4 CPUs would do. The training used 37-38% of 12 CPUs, against 14% of
+  32 for the rl3_b0.005 seeds.
+- Seed 0's jobs are listed in the sections of rl3_b0.005 and its seeds.
+
+### RL-3 on the seed 1-3 heads policy models: matched aux / heads pairs after RL-3 (submitted 2026-11-20 23:47)
+
+**Question.** Does the aux-loss advantage (findings 59-64) survive RL-3? RL-3 evens out differences between start
+models (finding 66), and the heads family had one RL-3 run only (rl3_heads_b0.005, seed 0; aux − heads after RL-3:
+navtest v1 +0.012, v2 +0.014, navhard +0.017, a single pair).
+
+**Runs.** `rl3_heads_b0.005_pipe_s{1,2,3}`, the same recipe as the aux pipeline runs (rl3_b0.005, β 0.005, `++seed=N`),
+from the val-chosen stage 3 heads models: p3_heads_policy_s1 ep 3, s2 ep 2, s3 ep 3 (merged checkpoints). Each run's
+own scorer is its start model's stage 3 predictions (`p3_heads_policy_sN_epNN`, already on disk, so the predict job
+depends only on the training). Seed 0 of the heads pipeline is `rl3_heads_b0.005_ep01`: its composed overrides differ
+from rl3_b0.005's only in the start checkpoint, the RL reference cache and the experiment name (checked 2026-11-20),
+so 4 matched aux / heads pairs after RL-3 result (aux: rl3_b0.005_ep01 + rl3_b0.005_pipe_s1-s3).
+
+**Chain.** `exp/rl3_logs/submit_rl3_pipeline.sh` (now with `SRC`, `EXP`, `LOG` and a "-" GPU id; defaults unchanged)
+run as `SRC=p3_heads_policy EXP=rl3_heads_b0.005_pipe SPECS="1:3:- 2:2:- 3:3:-"`; log
+`exp/rl3_logs/rl3_heads_pipeline_runs_2026-11-20.txt`. Same jobs and resources as the aux pipeline runs.
+
+| Run | cache | training | predict | scoring / v1 comfort / EC jobs |
+|---|---|---|---|---|
+| rl3_heads_b0.005_pipe_s1 | 15282125-27 | 15282128 | 15282129 | 15282130-53 |
+| rl3_heads_b0.005_pipe_s2 | 15282154-56 | 15282157 | 15282158 | 15282159-82 |
+| rl3_heads_b0.005_pipe_s3 | 15282183-85 | 15282186 | 15282187 | 15282188-211 |
+
+### Own-scorer evaluations that were missing (submitted 2026-11-20 23:47)
+
+- `rl3_heads_b0.005_ep01` (heads seed 0) already had its own scorer (p3_heads_policy_ep02) for argmax, shortlist /
+  shortlist_v1 k 256, mixture λ 3, mixture_v1 λ 10 and navhard. Added: navtest mixture λ 10 (15282212) and the EC rule
+  with the own scorer (selection 15282213-14, scoring 15282215-26), so that it matches the aux runs' rule set.
+- `rl3_ecshort4_b0.005_ep01` / `_s1_ep01` (EC in the reward, shortlist previous plan, weight 4). The navhard best
+  0.456 (shortlist + EC rule n 64) and every other scorer-based number of the EC-reward models used the control scorer
+  (p3_aux_ctrl ep 2). Only mixture_v1 λ 10 had the own scorer (p3_aux_policy_ep03). Added with the own scorer:
+  - navtest shortlist k 256, shortlist_v1 k 256 (+ v1 comfort), mixture λ 10;
+  - navhard shortlist k 256;
+  - EC rule (3 bases, n 16 / 64; navtest sequential, navhard).
+
+  Seed 0 jobs 15282227-45, seed 1 jobs 15282246-64.
+- The other EC-reward models (ec2, ec4, ecshort2) still have only the control scorer.
+
+Script `exp/rl3_logs/submit_own_scorer_evals.sh`, log `exp/rl3_logs/own_scorer_evals_2026-11-20.txt`. Output
+folders: `<pred>_<rule>` and `<pred>_own_ec[seq]_*`, separate from the control-scorer folders `<pred>__ctrlscorer_*`
+and `<pred>_ec[seq]_*`.
+
+### Imitation-only phase 3 from p1d_total: p3_imitation (submitted 2026-11-20 23:47)
+
+**Question.** Is training on scores better than imitation alone, with the start checkpoint held fixed? The existing
+imitation-only run p3_policy started from p1c_ed05, while p3_heads / p3_aux start from p1d_total ep 10. So its gap to
+the score-trained models (navtest v2 0.775 vs 0.815, final_evaluation.md "Decoupled policy head") mixes the loss with
+the start checkpoint.
+
+**Run.** `p3_imitation`: the p3_heads recipe (`seed_aux_heads/submit_stage2.sh` COMMON, seed 0, from p1d_total ep 10)
+with p3_policy's losses:
+- CE 1, ED 1;
+- sub-score losses 0;
+- plain labels, no aux;
+- `log_pdm_score_metrics=true` (proxy metrics only, loss unchanged);
+- monitor `val/pdm_scores/argmax_score_gap`.
+
+Batch 4 × accum 8 × 4 GPUs, 10 epochs, patience 3; 40 CPUs / 156G / 16 h, as the stage 2 seeds. Training 15282265,
+then the offline val evaluation of every epoch, 15282266 (`eval_latest_run.sh`, afterany).
+
+**Next.** Official evaluation of the val-argmax epoch: argmax on navtest v2, navtest v1 (+ v1 comfort) and navhard.
+
+**Caveat.** p1d_total's phase 1 already had the sub-score losses (weight 1), and they also trained the planner queries
+that the policy head shares. Phase 3 is therefore matched in everything but the loss, while phase 1 is shared. Script
+`exp/seed_aux_heads/submit_p3_imitation.sh`, log `p3_imitation_2026-11-20.txt`.
+
 ### RL-3 with the GRPO objective (submitted 2026-11-17)
 
 Question: does the sampled objective (GRPO) match or beat the exact objective once the LoRA trains (RL-3)? On the
