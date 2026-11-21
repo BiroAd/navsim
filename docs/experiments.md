@@ -1391,6 +1391,14 @@ that the policy head shares. Phase 3 is therefore matched in everything but the 
   - navtest argmax (v1 + v2) 15303413;
   - navhard argmax 15303414;
   - v1 comfort 15303415.
+- Status 2026-11-21 17:10: all 4 jobs completed (predict 19 min, navtest 18 min, navhard 34 min, v1 comfort 11 min).
+  Results:
+  - navtest v2 0.7852 (DAC 0.878, EC 0.811, 15.3% of scenes scored 0);
+  - navtest v1 (v1 comfort) 0.8041;
+  - navhard 0.189 (stage one 0.586 / two 0.322).
+
+  The score-trained models from the same start are +0.019 to +0.073 better on navtest v2 (paired SE 0.003) and
+  +0.045 to +0.153 on navhard. Details: final_evaluation.md, "Imitation only vs training on scores" (finding 75).
 
 ### Official evaluation of stage 1: p1d_total ep 10 (submitted 2026-11-21 00:24)
 

@@ -2,7 +2,7 @@
 
 Official PDM scores of the thesis models, from raw camera images through the NAVSIM devkit scripts. The model-selection
 proxy (navtrain val, precomputed codebook scores) is in [checkpoint_evaluation.md](checkpoint_evaluation.md); runs and
-their settings are in [experiments.md](experiments.md). Last updated 2026-11-21: aux vs heads after RL-3, 4 pairs (findings 71-73); rl3_ecshort4 with its own scorer (finding 74); stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
+their settings are in [experiments.md](experiments.md). Last updated 2026-11-21: imitation only vs scores with the same start (finding 75); aux vs heads after RL-3, 4 pairs (findings 71-73); rl3_ecshort4 with its own scorer (finding 74); stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
 tables (findings 51-52), RL-3 with GRPO / Dr. GRPO (53-55), 6 seeds of rl3_b0.005 (56-58).
 
 **Current bests (2026-11-14), all from RL-3 β = 0.005 (p3_aux_policy ep 3 + RL-3, some with EC in the reward), human filter on:**
@@ -1657,6 +1657,7 @@ brackets, the mean ± SD over the 4 seed replicates (stage 2/3: findings 59-64; 
 | | | heads | 0.7558 | **0.8119** | **0.264** |
 | 2. phase 3 (+ LLM / vision LoRA, sub-score + aux losses) | p3_aux | heads | 0.8122 (0.8117 ± 0.0021) | 0.8792 (0.8790 ± 0.0007) | 0.363 (0.360 ± 0.004) |
 | | p3_heads (no aux) | heads | 0.8044 (0.8042 ± 0.0007) | 0.8713 (0.8720 ± 0.0013) | 0.342 (0.344 ± 0.004) |
+| | p3_imitation (phase 3 with CE + ED only, no score losses; added 2026-11-21) | argmax | 0.7852 | 0.8041 | 0.189 |
 | 3. policy head on top (score-weighted labels) | p3_aux_policy | argmax | 0.8433 (0.8427 ± 0.0018) | 0.8627 (0.8621 ± 0.0021) | 0.254 (0.257 ± 0.004) |
 | | | shortlist k 256 | 0.8674 (0.8675 ± 0.0008) | 0.8924 (0.8933 ± 0.0011) | 0.386 (0.372 ± 0.015) |
 | | p3_heads_policy (no aux) | shortlist k 256 | 0.8585 (0.8619 ± 0.0024) | 0.8838 (0.8863 ± 0.0021) | 0.337 (0.352 ± 0.012) |
@@ -2063,6 +2064,69 @@ scorer, 6 seeds.
       0.9169 ± 0.0010 (−0.009). EC in the reward trades navtest for navhard (findings 36-37).
     - The own vs control scorer on ecshort4: navtest −0.0007 to −0.0012, navhard −0.003 to +0.004. The argmax-base
       EC rule is identical with either scorer, because it does not use the scorer.
+
+### Imitation only vs training on scores, same start checkpoint: p3_imitation (2026-11-21)
+
+`p3_imitation` (experiments.md) is phase 3 from p1d_total ep 10, as for p3_heads / p3_aux, but trained only with
+imitation losses:
+- CE 1, ED 1; no sub-score losses, no aux, plain labels;
+- val-argmax epoch 7 of 10 (0.7207).
+
+Official evaluation:
+- GPU 15303412 (19 min); navtest 15303413, navhard 15303414, v1 comfort 15303415, all completed;
+- 12,146 valid navtest scenes, 0 invalid navhard scenes.
+
+The earlier imitation baseline p3_policy started from p1c_ed05, so its gap mixed the loss with the start checkpoint
+(finding 6 of "Decoupled policy head").
+
+| Model (all from p1d_total ep 10 unless noted) | Training after phase 1 | Rule | navtest v2 | navtest v1 (v1 comfort) | navhard (stage one / two) | DAC | EP | EC | score 0 |
+|---|---|---|---|---|---|---|---|---|---|
+| p1d_total ep 10 (stage 1) | – | argmax | 0.7687 | 0.7881 | 0.170 (0.544 / 0.302) | 0.866 | 0.870 | 0.805 | 16.9% |
+| **p3_imitation ep 7** | phase 3, CE + ED only | argmax | **0.7852** | **0.8041** | **0.189** (0.586 / 0.322) | 0.878 | 0.873 | 0.811 | 15.3% |
+| p3_heads ep 5 | phase 3, sub-score losses | heads | 0.8044 (4 seeds 0.8042) | 0.8713 (0.8720) | 0.342 (0.344) | 0.978 | 0.843 | 0.217 | 5.3% |
+| p3_heads_policy ep 2 | + policy head, score-weighted labels | argmax | 0.8322 (0.8344 ± 0.0016) | 0.8520 (0.8540) | 0.234 (0.245) | 0.928 | 0.874 | 0.805 | 10.1% |
+| | | shortlist k 256 | 0.8585 (0.8619) | 0.8838 (0.8863) | 0.337 (0.352) | 0.969 | 0.854 | 0.743 | 5.7% |
+| p3_aux_policy ep 3 | + aux losses in phase 3 | argmax | 0.8433 (0.8427) | 0.8627 (0.8621) | 0.254 (0.257) | 0.939 | 0.874 | 0.815 | 9.0% |
+| p3_policy ep 7 (from p1c_ed05) | phase 3, CE + ED only | argmax | 0.7748 | 0.7944 | 0.189 (0.569 / 0.317) | 0.870 | 0.872 | 0.804 | 16.3% |
+
+p3_imitation sub-scores:
+- navtest v2: NC 0.9658, DAC 0.8779, DDC 0.9786, TLC 0.9975, EP 0.8730, TTC 0.9567, LK 0.9422, HC 0.9822, EC 0.8113.
+- navtest v1: v1 PDMS with HC 0.8022, v1 comfort 0.9980.
+- navhard stage one: NC 0.947, DAC 0.711, DDC 0.964, TLC 0.993, EP 0.833, TTC 0.933, LK 0.893, HC 0.978, EC 0.671.
+- navhard stage two: NC 0.767, DAC 0.595, DDC 0.770, TLC 0.985, EP 0.842, TTC 0.748, LK 0.446, HC 0.960, EC 0.656.
+
+Paired per-scene differences on navtest (n = 12,146, mean ± SE):
+
+| Comparison | v2 | v1 (v1 comfort) |
+|---|---|---|
+| p3_heads_policy argmax − p3_imitation (policy vs policy) | +0.0471 ± 0.0029 | +0.0479 ± 0.0029 |
+| p3_aux_policy argmax − p3_imitation | +0.0582 ± 0.0029 | |
+| p3_heads heads selection − p3_imitation | +0.0192 ± 0.0031 | +0.0672 ± 0.0033 (score_heads_v1) |
+| p3_heads_policy shortlist k 256 − p3_imitation | +0.0733 ± 0.0030 | |
+| p3_imitation − p1d_total argmax (what phase 3 imitation adds) | +0.0165 ± 0.0026 | +0.0160 ± 0.0027 |
+| p3_imitation − p3_policy (start p1d_total vs p1c_ed05) | +0.0104 ± 0.0028 | +0.0097 ± 0.0028 |
+
+75. **With the start checkpoint fixed, training on scores clearly beats imitation alone.**
+    - Every score-based model from the same start beats p3_imitation on all three benchmarks:
+      - policy against policy (argmax, score-weighted labels): v2 +0.047 ± 0.003, v1 +0.048, navhard +0.045
+        (0.234 vs 0.189; 4-seed mean 0.245);
+      - heads selection: v2 +0.019, v1 +0.067, navhard +0.153;
+      - the full stage 3 (shortlist k 256): v2 +0.073.
+    - These are 6-25 paired SE and far above the seed SDs (navtest ≤ 0.0024, navhard ≤ 0.015).
+    - The gain comes from fewer failures, not from driving differently: DAC 0.878 → 0.928-0.978, scenes scored 0
+      15.3% → 5-10%, navhard stage one 0.586 → 0.64-0.76. EP and EC of the argmax policies are unchanged (0.873 /
+      0.81), so the score-weighted policy is as fast and as consistent as the imitation policy.
+    - Phase 3 with imitation alone adds little over its start: +0.017 ± 0.003 on navtest v2 over p1d_total's argmax,
+      navhard +0.019. Training the LoRA does not help much without the score signal.
+    - The start-checkpoint confound of the earlier baseline was small: p3_imitation − p3_policy = +0.010 ± 0.003
+      (v2 and v1), navhard equal (0.189 / 0.189). So finding 6 of "Decoupled policy head" holds with a matched
+      start.
+    - Caveats:
+      - One imitation run; its seed SD is UNKNOWN.
+      - The score-based policies also had the policy-head stage (2-4 epochs). But p3_imitation's own val argmax had
+        stopped improving (0.7207 at epoch 7, 0.7194 at epoch 9, vs p3_heads_policy's val argmax 0.777), so longer
+        imitation training would not close a 0.05 gap.
+      - Phase 1 (p1d_total) is shared and itself had the sub-score losses.
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 
