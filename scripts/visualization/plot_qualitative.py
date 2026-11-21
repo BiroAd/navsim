@@ -7,11 +7,9 @@ Figures (--figure):
                mixture + EC rule n 64 (sequential). BEV also shows the policy's top candidates (end points coloured by
                probability) and the scorer's top-256 shortlist (grey end points).
   consecutive  the plans at t - 0.5 s and at t for heads selection vs mixture + EC rule (EC compares the two).
-Scenes are chosen by stated rules from the per-scene official scores (no hand picking):
-  rules:       rescue   argmax scored < 0.3, shortlist >= 0.8 (top by shortlist - argmax)
-               heads_fail  heads selection >= 0.3 below an argmax scored >= 0.8 (top by argmax - heads)
-               typical  all rules > 0.5 and the rules choose different trajectories (random, --seed)
-               failure  mixture + EC rule (the best navtest rule) scored 0 (random, --seed)
+Scenes are chosen by stated rules from the per-scene official scores (no hand picking); rules figure categories:
+  shortlist_rescues, heads_choice_unsafe, all_rules_safe, beats_human, perfect_turns, best_rule_fails (definitions in
+  CATEGORIES below and in rules/index.md)
   consecutive: heads EC = 0 and EC-rule EC = 1 at t, both without collision / off-road (top by how far the heads plan's
                end point jumps between t - 0.5 s and t minus the EC rule's jump)
 Needs the test sensor image mounted (squashfuse $OPENSCENE_DATA_ROOT/images/test_sensor_blobs.sqfs <dir>) and the
@@ -57,7 +55,10 @@ STYLE = {  # label -> (colour, line style, width, z-order)
     "shortlist k256": ("#2ca02c", "-", 2.0, 28),
     "mixture λ10": ("#9467bd", "-", 2.0, 28),
     "mixture + EC n64": ("#d62728", "-", 2.6, 29),
+    "argmax + EC n64": ("#17becf", "-", 2.2, 28),
+    "shortlist + EC n64": ("#006d2c", "-", 2.2, 28),
 }
+RULE5 = ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64"]  # rules figure panels
 
 
 # ----------------------------------------------------------------------------------------------- data
@@ -66,8 +67,8 @@ def latest_csv(folder: Path):
     return max(fs, key=os.path.getmtime) if fs else None
 
 
-def per_scene(name: str) -> pd.DataFrame:
-    f = latest_csv(E / "pdm_navtest" / f"{name}_non_reactive_split")
+def per_scene(name: str, suffix: str = "_non_reactive_split") -> pd.DataFrame:
+    f = latest_csv(E / "pdm_navtest" / f"{name}{suffix}")
     if f is None:
         raise FileNotFoundError(name)
     df = pd.read_csv(f)
@@ -87,7 +88,23 @@ class Rules:
         self.model, self.scorer = load_predictions(E / "predictions" / model / "navtest"), load_predictions(
             E / "predictions" / scorer / "navtest")
         self.ec = load_predictions(E / "predictions" / ec_folder / "navtest")
+        self.ec_more = {k: load_predictions(E / "predictions" / f"{model}_own_ecseq_{b}_n64" / "navtest")
+                        for k, b in [("argmax + EC n64", "argmax"), ("shortlist + EC n64", "short256")]}
         self.codebook = self.model["codebook"].float()
+        # drawing: the original 40-step (10 Hz) codebook; its poses at 0.5, 1.0, ..., 4.0 s are the 8-step entries
+        cb_dir = REPO / "navsim/agents/vision_llm_lora/codebook"
+        self.cb8, self.cb40 = np.load(cb_dir / "16384_8step.npy"), np.load(cb_dir / "16384.npy")
+        assert np.array_equal(self.cb40[:, 4::5], self.cb8), "16384.npy and 16384_8step.npy do not match"
+        self._key = {e.tobytes(): k for k, e in enumerate(self.cb8)}
+
+    def fine(self, traj):
+        """The 40-step codebook entry of an 8-step codebook trajectory (unchanged if it is not one)."""
+        t = np.ascontiguousarray(traj, dtype=np.float32)
+        k = self._key.get(t.tobytes())
+        if k is None:
+            d = np.abs(self.cb8 - t).reshape(len(self.cb8), -1).max(1)
+            k = int(d.argmin()) if d.min() < 1e-4 else None
+        return traj if k is None else self.cb40[k].astype(np.float64)
 
     def __call__(self, token: str, top_n: int = 200):
         r, s = self.model["row"][token], self.scorer["row"][token]
@@ -99,6 +116,9 @@ class Rules:
                "shortlist k256": select_trajectory(pred, "shortlist", self.codebook, shortlist_size=256)[0].numpy(),
                "mixture λ10": select_trajectory(pred, "mixture", self.codebook, mixture_lambda=10.0)[0].numpy(),
                "mixture + EC n64": np.array(self.ec["arrays"]["trajectory"][self.ec["row"][token]])}
+        for k, pr in self.ec_more.items():
+            out[k] = np.array(pr["arrays"]["trajectory"][pr["row"][token]])
+        out = {k: self.fine(v) for k, v in out.items()}
         p = pred["trajectory_logits"].log_softmax(-1).exp()[0]
         top = p.topk(top_n)
         total = aggregate_pdm_scores(pred["pdm_score_logits"].sigmoid())[0]
@@ -112,9 +132,10 @@ def scene_loader(tokens, sensor_path: Path, frames=(3,)):
     cfg = OmegaConf.load(REPO / "navsim/planning/script/config/common/train_test_split/scene_filter/navtest.yaml")
     sf = instantiate(cfg)
     sf.tokens = list(tokens)
-    cams = dict(cam_l0=False, cam_l1=False, cam_l2=False, cam_r0=False, cam_r1=False, cam_r2=False, cam_b0=False)
+    cams = dict(cam_l1=False, cam_l2=False, cam_r1=False, cam_r2=False, cam_b0=False)
     return SceneLoader(D / "navsim_logs/test", sensor_path, sf,
-                       sensor_config=SensorConfig(cam_f0=list(frames), lidar_pc=False, **cams))
+                       sensor_config=SensorConfig(cam_f0=list(frames), cam_l0=list(frames), cam_r0=list(frames),
+                                                  lidar_pc=False, **cams))
 
 
 def previous_token(loader: SceneLoader, token: str):
@@ -134,13 +155,29 @@ def ground_z(frame) -> float:
     return float(np.median(sel[:, 2] - sel[:, 5] / 2))
 
 
-def densify(traj_xy, n=8):
-    pts = np.concatenate([[[0.0, 0.0]], traj_xy[:, :2]])
+def densify(traj, n=8):
+    """Smooth drawing curve through the ego origin and the poses: cubic Hermite segments whose tangents follow each
+    pose's heading (length = segment length), so the drawn path is tangent to the planned headings instead of a
+    polyline with corners at the 0.5 s waypoints. Drawing only; scoring uses the poses. Without a heading column:
+    linear segments."""
+    traj = np.asarray(traj)
+    pts = np.concatenate([[[0.0, 0.0]], traj[:, :2]])
+    if traj.shape[1] < 3:
+        return np.concatenate([[pts[0]]] + [a + np.linspace(0, 1, n + 1)[1:, None] * (b - a)
+                                            for a, b in zip(pts[:-1], pts[1:])])
+    yaw = np.concatenate([[0.0], traj[:, 2]])
+    s = np.linspace(0, 1, n + 1)[1:, None]
+    h00, h10, h01, h11 = 2 * s**3 - 3 * s**2 + 1, s**3 - 2 * s**2 + s, -2 * s**3 + 3 * s**2, s**3 - s**2
     out = [pts[0]]
-    for a, b in zip(pts[:-1], pts[1:]):
-        for t in np.linspace(0, 1, n + 1)[1:]:
-            out.append(a + t * (b - a))
-    return np.array(out)
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        L = np.linalg.norm(b - a)
+        if L < 0.05:  # standing still: no tangent
+            out.append(np.repeat(b[None], n, 0))
+            continue
+        ta, tb = L * np.array([np.cos(yaw[i]), np.sin(yaw[i])]), L * np.array([np.cos(yaw[i + 1]), np.sin(yaw[i + 1])])
+        out.append(h00 * a + h10 * ta + h01 * b + h11 * tb)
+    return np.vstack([np.atleast_2d(o) for o in out])
 
 
 def project(camera, xy, z):
@@ -152,8 +189,8 @@ def project(camera, xy, z):
     return uv, keep
 
 
-def draw_camera(ax, frame, trajs, title=None):
-    cam = frame.cameras.cam_f0
+def draw_camera(ax, frame, trajs, title=None, cam_name="cam_f0"):
+    cam = getattr(frame.cameras, cam_name)
     img = cam.image
     ax.imshow(img)
     z = ground_z(frame)
@@ -161,7 +198,8 @@ def draw_camera(ax, frame, trajs, title=None):
         c, ls, lw, zo = STYLE[label]
         uv, keep = project(cam, densify(traj), z)
         uv = uv[keep]
-        ax.plot(uv[:, 0], uv[:, 1], color=c, linestyle=ls, linewidth=lw * 1.4, zorder=zo, solid_capstyle="round")
+        ax.plot(uv[:, 0], uv[:, 1], color=c, linestyle=ls, linewidth=lw * 1.4, zorder=zo, solid_capstyle="round",
+                clip_on=True)
     h, w = img.shape[:2]
     ax.set_xlim(0, w)
     ax.set_ylim(h * 0.99, h * 0.30)  # crop the sky
@@ -184,24 +222,24 @@ def draw_bev(ax, scene, trajs, cand=None, extra=None, lim=None):
     lim = lim or bev_extent(trajs, extra)
     frame = scene.frames[scene.scene_metadata.num_history_frames - 1]
     add_configured_bev_on_ax(ax, scene.map_api, frame)
-    if cand is not None:
+    if cand is not None and len(cand["short_xy"]):
         ax.scatter(cand["short_xy"][:, 1], cand["short_xy"][:, 0], s=4, c="0.45", marker="x", linewidths=0.5,
                    alpha=0.45, zorder=20, label="heads top-256 (end points)")
+    if cand is not None and len(cand["policy_xy"]):
         o = np.argsort(cand["policy_p"])
         ax.scatter(cand["policy_xy"][o, 1], cand["policy_xy"][o, 0], s=4, c=np.log10(cand["policy_p"][o]),
                    cmap="viridis", vmin=np.log10(cand["policy_p"]).max() - 3, zorder=21, alpha=0.55, linewidths=0,
                    label="policy top-200 (colour: log p)")
     for label, traj in trajs.items():
         c, ls, lw, zo = STYLE[label]
-        pts = densify(traj, 1)
+        pts = densify(traj, 10)
         ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=lw, zorder=zo, label=label,
-                marker="o" if label != "human" else None, markersize=2.5)
+                solid_capstyle="round")
         ax.plot(pts[-1, 1], pts[-1, 0], marker="*", markersize=11, color=c, markeredgecolor="white",
                 markeredgewidth=0.7, zorder=zo + 10)  # end point: a stop shows as a star at the ego
     for label, (traj, c, ls) in (extra or {}).items():
-        pts = traj[:, :2]
-        ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=1.6, zorder=27, label=label, marker=".",
-                markersize=3)
+        pts = densify(traj, 10)
+        ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=1.8, zorder=27, label=label)
         ax.plot(pts[-1, 1], pts[-1, 0], marker="*", markersize=9, color="white", markeredgecolor=c, zorder=37)
     ax.set_aspect("equal")
     ax.set_xlim(lim[1], lim[0])  # left = +y
@@ -223,20 +261,90 @@ def scene_info(scene):
 
 
 # ----------------------------------------------------------------------------------------------- figures
-def select_rules(scores, rng, n_top, n_rand):
-    a, h, s, m, me = (scores[k]["score"] for k in ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64"])
-    idx = a.index.intersection(h.index).intersection(s.index).intersection(m.index).intersection(me.index)
-    a, h, s, m, me = a[idx], h[idx], s[idx], m[idx], me[idx]
+RULE_TITLES = {  # panel titles: what each rule does
+    "argmax": "Policy only (argmax)\nmost likely trajectory",
+    "heads": "Sub-score heads only\nbest predicted score",
+    "shortlist k256": "Shortlist (k = 256)\npolicy's pick among the heads' 256 best",
+    "mixture λ10": "Mixture (λ = 10)\nmax log p + 10 · log predicted score",
+    "mixture + EC n64": "Mixture + consistency rule\nkeeps the plan of t − 0.5 s if possible",
+    "argmax + EC n64": "Policy + consistency rule\namong the policy's 64 most likely",
+    "shortlist + EC n64": "Shortlist + consistency rule\namong the shortlist's 64 best for the policy",
+}
+CATEGORIES = {  # folder -> how the scenes were chosen (also in index.md)
+    "shortlist_rescues": "policy argmax scored < 0.3, shortlist >= 0.8 (top by shortlist - argmax)",
+    "heads_choice_unsafe": "heads-only choice >= 0.3 below an argmax scored >= 0.8 (top by argmax - heads)",
+    "all_rules_safe": "every rule > 0.5 and the rules choose different trajectories (random)",
+    "beats_human": "best rule (mixture + EC) >= 0.95 while the logged human <= 0.8 (top by model - human)",
+    "perfect_turns": "best rule scored >= 0.99 in a turn (its plan ends > 35 deg from the current heading; random)",
+    "best_rule_fails": "best rule (mixture + EC) scored 0 (random)",
+}  # every category: at most one scene per log
+
+
+def first_per_log(tokens, log_of, n):
+    """The first n tokens in order, at most one per log (scenes of one log are consecutive frames of one drive)."""
+    out, seen = [], set()
+    for t in tokens:
+        if log_of(t) not in seen:
+            out.append(t)
+            seen.add(log_of(t))
+        if len(out) == n:
+            break
+    return out
+
+
+def select_rules(scores, human, rules, rng, n_top, n_rand, log_of):
+    keys = ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64"]
+    idx = scores[keys[0]].index
+    for k in keys[1:]:
+        idx = idx.intersection(scores[k].index)
+    idx = idx.intersection(human.index)
+    a, h, s, m, me = (scores[k]["score"][idx] for k in keys)
+    hu = human["score"][idx]
     out = {}
     q = (a < 0.3) & (s >= 0.8)
-    out["rescue"] = list((s - a)[q].sort_values(ascending=False).index[:n_top])
+    out["shortlist_rescues"] = first_per_log((s - a)[q].sort_values(ascending=False).index, log_of, n_top)
     q = (a >= 0.8) & (h < a - 0.3)
-    out["heads_fail"] = list((a - h)[q].sort_values(ascending=False).index[:n_top])
+    out["heads_choice_unsafe"] = first_per_log((a - h)[q].sort_values(ascending=False).index, log_of, n_top)
     q = (a > 0.5) & (h > 0.5) & (s > 0.5) & (me > 0.5)
-    out["typical"] = list(rng.choice(np.array(idx[q]), size=n_rand * 3, replace=False))  # filtered to differing below
+    typ = []
+    seen = set()
+    for t in rng.choice(np.array(idx[q]), size=min(int(q.sum()), n_rand * 10), replace=False):
+        if log_of(t) in seen:
+            continue
+        tr, _ = rules(t)
+        if np.ptp(np.array([tr[k][-1, :2] for k in RULE5]), axis=0).max() > 1.0:  # end points > 1 m apart
+            typ.append(t)
+            seen.add(log_of(t))
+        if len(typ) == n_rand:
+            break
+    out["all_rules_safe"] = typ
+    q = (me >= 0.95) & (hu <= 0.8)
+    out["beats_human"] = first_per_log((me - hu)[q].sort_values(ascending=False).index, log_of, n_top)
+    turns = [t for t in idx[me >= 0.99] if abs(rules.ec["arrays"]["trajectory"][rules.ec["row"][t]][-1, 2]) > 0.61]
+    out["perfect_turns"] = first_per_log(rng.permutation(np.array(turns)), log_of, n_rand)
     q = me == 0
-    out["failure"] = list(rng.choice(np.array(idx[q]), size=n_rand, replace=False))
+    out["best_rule_fails"] = first_per_log(rng.permutation(np.array(idx[q])), log_of, n_rand)
     return out
+
+
+def three_cameras(axes, frame, trajs, dotted=None):
+    """Front-left, front, front-right cameras with the trajectories projected (each where that camera sees it) and
+    their end points as stars; dotted: {label: (traj, colour)} drawn dotted (e.g. the plan of t - 0.5 s)."""
+    z = ground_z(frame)
+    for ax, name in zip(axes, ["cam_l0", "cam_f0", "cam_r0"]):
+        draw_camera(ax, frame, trajs, cam_name=name)
+        cam = getattr(frame.cameras, name)
+        h, w = cam.image.shape[:2]
+        items = [(STYLE[k][0], t, "-") for k, t in trajs.items()] + [(c, t, ":") for t, c in (dotted or {}).values()]
+        for colour, traj, ls in items:
+            if ls == ":":
+                uv, keep = project(cam, densify(traj), z)
+                ax.plot(uv[keep, 0], uv[keep, 1], color=colour, linestyle=":", linewidth=2.6, zorder=30)
+            uv, keep = project(cam, traj[-1:, :2], z)
+            if keep[0] and 0 < uv[0, 0] < w and h * 0.3 < uv[0, 1] < h:
+                ax.plot(uv[0, 0], uv[0, 1], marker="*", markersize=13, color=colour if ls == "-" else "white",
+                        markeredgecolor="white" if ls == "-" else colour, markeredgewidth=0.9, zorder=40)
+        ax.set_title({"cam_l0": "front left", "cam_f0": "front", "cam_r0": "front right"}[name], fontsize=8)
 
 
 def run_rules(args):
@@ -245,52 +353,71 @@ def run_rules(args):
              "shortlist k256": f"{args.model}_shortlist_k256", "mixture λ10": f"{args.model}_mixture_lam10",
              "mixture + EC n64": f"{args.model}_own_ecseq_mix10_n64_argmax"}
     scores = {k: per_scene(v) for k, v in names.items()}
+    human = per_scene(args.human_eval, suffix="")
     rng = np.random.default_rng(args.seed)
-    sel = select_rules(scores, rng, args.n_top, args.n_random)
-    # typical: keep scenes where the rules' choices differ (end points > 1 m apart), first n_random
-    typ = []
-    for t in sel["typical"]:
-        tr, _ = rules(t)
-        ends = np.array([v[-1, :2] for v in tr.values()])
-        if np.ptp(ends, axis=0).max() > 1.0:
-            typ.append(t)
-        if len(typ) == args.n_random:
-            break
-    sel["typical"] = typ
-    tokens = [t for v in sel.values() for t in v]
-    loader = scene_loader(tokens, Path(args.sensor_path))
+    loader = scene_loader(list(scores["argmax"].index), Path(args.sensor_path))  # all navtest scenes (logs, rendering)
+    log_of = lambda t: loader.scene_frames_dicts[t][3]["log_name"]
+    sel = select_rules(scores, human, rules, rng, args.n_top, args.n_random, log_of)
     out_root = Path(args.out_dir) / "rules"
     index = ["# Qualitative: selection rules on one scene", "",
-             f"Model `{args.model}`, scorer `{args.scorer}` (heads score from `{args.heads_eval}_score_heads`), EC rule "
-             f"`{args.ec_folder}`. Selection: see the script docstring; seed {args.seed}.", "",
-             "| Category | File | Token | " + " | ".join(names) + " |", "|---|---|---|" + "---|" * len(names)]
+             f"Model `{args.model}`, scorer `{args.scorer}` (heads-only score from `{args.heads_eval}_score_heads`), "
+             f"EC rule `{args.ec_folder}`, human = `{args.human_eval}`. Seed {args.seed}.", "",
+             "Categories (how the scenes were chosen, from the per-scene official navtest v2 scores):", ""] + \
+            [f"- `{c}`: {d}" for c, d in CATEGORIES.items()] + \
+            ["", "| Category | File | Token | human | " + " | ".join(names) + " |",
+             "|---|---|---|---|" + "---|" * len(names)]
     for cat, toks in sel.items():
         (out_root / cat).mkdir(parents=True, exist_ok=True)
         for i, tok in enumerate(toks):
             scene = loader.get_scene_from_token(tok)
             frame = scene.frames[scene.scene_metadata.num_history_frames - 1]
             tr, cand = rules(tok)
-            trajs = {"human": scene.get_future_trajectory().poses, **tr}
-            fig = plt.figure(figsize=(15, 5.6))
-            gs = fig.add_gridspec(1, 2, width_ratios=[1.75, 1.0], wspace=0.02)
-            ax_c, ax_b = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
-            draw_camera(ax_c, frame, trajs)
-            draw_bev(ax_b, scene, trajs, cand)
+            tr = {k: tr[k] for k in RULE5}
+            hum = scene.get_future_trajectory().poses
+            lim = bev_extent({"human": hum, **tr})
+            fig = plt.figure(figsize=(17, 8.0))
+            gs = fig.add_gridspec(2, 5, height_ratios=[0.62, 1.0], hspace=0.22, wspace=0.03)
+            top = gs[0, :].subgridspec(1, 3, wspace=0.01)
+            cam_axes = [fig.add_subplot(top[0, k]) for k in range(3)]
+            three_cameras(cam_axes, frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]})
+            d_end = float(np.linalg.norm(tr["mixture + EC n64"][-1, :2]))
+            if d_end < 6.0:  # its end point lies below the image
+                cam_axes[1].text(0.5, 0.04, f"final rule: stops within {d_end:.1f} m (below the image)",
+                                 transform=cam_axes[1].transAxes, ha="center", color="white", fontsize=9,
+                                 bbox=dict(facecolor="#d62728", alpha=0.85, edgecolor="none"))
+            fig.text(0.5, 0.945, "cameras: logged human (black dashed) and the final rule, mixture + consistency (red); "
+                     "stars = end points", ha="center", fontsize=9)
             same = {k: [j for j in list(tr)[: list(tr).index(k)] if np.abs(tr[j] - tr[k]).max() < 1e-3] for k in tr}
-            labels = ["human"] + [f"{k}: {fmt_scores(scores[k].loc[tok])}" + (f" (= {same[k][0]})" if same[k] else "")
-                                  for k in tr]
-            handles = [plt.Line2D([], [], color=STYLE[k][0], linestyle=STYLE[k][1], linewidth=STYLE[k][2]) for k in trajs]
-            handles += [plt.Line2D([], [], color="0.55", marker="x", linestyle=""),
-                        plt.Line2D([], [], color=plt.cm.viridis(0.9), marker="o", linestyle="")]
-            labels += ["heads top-256 end points", f"policy top-200 end points (colour log p; argmax p = {cand['p_argmax']:.2f})"]
-            fig.legend(handles, labels, loc="lower center", ncol=4, fontsize=8.5, frameon=False,
-                       title="per-scene PDMS (v2), failed terms in brackets", title_fontsize=8.5)
-            fig.suptitle(f"{cat}: {scene_info(scene)} | token {tok}", fontsize=10, y=0.98)
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.93, bottom=0.17)
+            for j, (k, traj) in enumerate(tr.items()):
+                ax = fig.add_subplot(gs[1, j])
+                c = None
+                if k == "argmax":
+                    c = dict(cand, short_xy=np.zeros((0, 2)))
+                elif k == "heads":
+                    c = dict(cand, policy_xy=np.zeros((0, 2)), policy_p=np.zeros(0))
+                elif k == "shortlist k256":
+                    c = cand
+                draw_bev(ax, scene, {"human": hum, k: traj}, c, lim=lim)
+                note = f" = {same[k][0]}" if same[k] else ""
+                ax.set_title(f"{RULE_TITLES[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}{note}", fontsize=8.5,
+                             color="#b00000" if scores[k].loc[tok, "score"] < 0.5 else "black")
+            handles = [plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8),
+                       plt.Line2D([], [], color="0.45", marker="x", linestyle=""),
+                       plt.Line2D([], [], color=plt.cm.viridis(0.9), marker="o", linestyle=""),
+                       plt.Line2D([], [], color="0.3", marker="*", linestyle="", markersize=10)]
+            labels = [f"logged human: EPDMS {fmt_scores(human.loc[tok])}", "heads' 256 best-scored end points",
+                      f"policy's 200 most likely end points (colour: log p; top p = {cand['p_argmax']:.2f})",
+                      "end point (on the ego = stop)"]
+            fig.legend(handles, labels, loc="lower center", ncol=4, fontsize=9, frameon=False,
+                       title="EPDMS = per-scene navtest v2 score (extended PDM score); failed terms in brackets (NC collision, DAC off-road, "
+                             "TTC time to collision, EC inconsistent with t − 0.5 s, LK lane keeping, DDC direction)",
+                       title_fontsize=8.5)
+            fig.suptitle(f"{cat.replace('_', ' ')}: {scene_info(scene)} | token {tok}", fontsize=10.5, y=0.995)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.10)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
-            index.append(f"| {cat} | `{f.relative_to(args.out_dir)}` | {tok} | " +
+            index.append(f"| {cat} | `{f.relative_to(args.out_dir)}` | {tok} | {human.loc[tok, 'score']:.2f} | " +
                          " | ".join(f"{scores[k].loc[tok, 'score']:.2f}" for k in names) + " |")
             print(f, flush=True)
     (out_root / "index.md").write_text("\n".join(index) + "\n")
@@ -303,78 +430,135 @@ def to_frame(traj_prev, pose_prev, pose_cur):
                   pose_prev[1] + s * traj_prev[:, 0] + c * traj_prev[:, 1]], 1)
     c, s = np.cos(pose_cur[2]), np.sin(pose_cur[2])
     d = g - pose_cur[:2]
-    return np.stack([c * d[:, 0] + s * d[:, 1], -s * d[:, 0] + c * d[:, 1]], 1)
+    xy = np.stack([c * d[:, 0] + s * d[:, 1], -s * d[:, 0] + c * d[:, 1]], 1)
+    if traj_prev.shape[1] < 3:
+        return xy
+    return np.concatenate([xy, (traj_prev[:, 2:3] + pose_prev[2] - pose_cur[2])], 1)  # heading too
+
+
+CONSEC_ROWS = [["heads", "argmax", "shortlist k256", "mixture λ10"],
+               ["argmax + EC n64", "shortlist + EC n64", "mixture + EC n64"]]
+CONSEC_CATS = {  # folder -> (rule that flips, its EC-rule version, description)
+    "heads_flips": ("heads", "mixture + EC n64",
+                    "heads-only choice fails EC, mixture + consistency passes, both without collision / off-road"),
+    "shortlist_flips": ("shortlist k256", "shortlist + EC n64",
+                        "shortlist fails EC, shortlist + consistency passes, both without collision / off-road"),
+}
 
 
 def run_consecutive(args):
     rules = Rules(args.model, args.scorer, args.ec_folder)
-    heads, ecr = per_scene(f"{args.heads_eval}_score_heads"), per_scene(f"{args.model}_own_ecseq_mix10_n64_argmax")
-    idx = heads.index.intersection(ecr.index)
-    q = ((heads.loc[idx, "two_frame_extended_comfort"] == 0) & (ecr.loc[idx, "two_frame_extended_comfort"] == 1)
-         & (heads.loc[idx, "no_at_fault_collisions"] == 1) & (heads.loc[idx, "drivable_area_compliance"] == 1)
-         & (ecr.loc[idx, "no_at_fault_collisions"] == 1) & (ecr.loc[idx, "drivable_area_compliance"] == 1))
-    cands = list(idx[q])
+    names = {"heads": f"{args.heads_eval}_score_heads", "argmax": f"{args.model}_argmax",
+             "shortlist k256": f"{args.model}_shortlist_k256", "mixture λ10": f"{args.model}_mixture_lam10",
+             "argmax + EC n64": f"{args.model}_own_ecseq_argmax_n64_argmax",
+             "shortlist + EC n64": f"{args.model}_own_ecseq_short256_n64_argmax",
+             "mixture + EC n64": f"{args.model}_own_ecseq_mix10_n64_argmax"}
+    scores = {k: per_scene(v) for k, v in names.items()}
+    human = per_scene(args.human_eval, suffix="")
+    idx = scores["heads"].index.intersection(human.index)
+    for k in names:
+        idx = idx.intersection(scores[k].index)
     rng = np.random.default_rng(args.seed)
-    cands = list(rng.choice(np.array(cands), size=min(len(cands), 400), replace=False))
-    # need the previous frame: load all candidate logs once
-    loader = scene_loader(cands, Path(args.sensor_path))
-    rows = []
-    for tok in cands:
-        prev = previous_token(loader, tok)
-        if prev not in rules.model["row"] or prev not in rules.ec["row"]:
-            continue
-        tr, _ = rules(tok)
-        trp, _ = rules(prev)
+    ok = lambda k: (scores[k].loc[idx, "no_at_fault_collisions"] == 1) & (scores[k].loc[idx, "drivable_area_compliance"] == 1)
+    ec = lambda k: scores[k].loc[idx, "two_frame_extended_comfort"]
+    pools = {}
+    for cat, (bad, good, _) in CONSEC_CATS.items():
+        q = (ec(bad) == 0) & (ec(good) == 1) & ok(bad) & ok(good)
+        pools[cat] = list(rng.choice(np.array(idx[q]), size=min(int(q.sum()), 300), replace=False))
+    loader = scene_loader([t for v in pools.values() for t in v], Path(args.sensor_path))
+
+    def poses(tok):
         fr = loader.scene_frames_dicts[tok]
-        pc, pp = (np.array([fr[i]["ego2global_translation"][0], fr[i]["ego2global_translation"][1],
-                            _yaw(fr[i]["ego2global_rotation"])]) for i in (3, 2))
-        jh = np.linalg.norm(to_frame(trp["heads"][:, :2], pp, pc)[-1] - tr["heads"][-1, :2])
-        je = np.linalg.norm(to_frame(trp["mixture + EC n64"][:, :2], pp, pc)[-1] - tr["mixture + EC n64"][-1, :2])
-        rows.append((tok, prev, jh - je, jh, je))
-    rows.sort(key=lambda r: -r[2])
+        return [np.array([fr[i]["ego2global_translation"][0], fr[i]["ego2global_translation"][1],
+                          _yaw(fr[i]["ego2global_rotation"])]) for i in (3, 2)]
+
+    def jump(tr, trp, k, pc, pp):
+        return float(np.linalg.norm(to_frame(trp[k], pp, pc)[-1, :2] - tr[k][-1, :2]))
+
+    chosen = {}
+    for cat, toks in pools.items():
+        bad, good, _ = CONSEC_CATS[cat]
+        rows = []
+        for tok in toks:
+            prev = previous_token(loader, tok)
+            if prev not in rules.model["row"] or any(prev not in pr["row"] for pr in [rules.ec, *rules.ec_more.values()]):
+                continue
+            tr, _ = rules(tok)
+            trp, _ = rules(prev)
+            pc, pp = poses(tok)
+            rows.append((jump(tr, trp, bad, pc, pp) - jump(tr, trp, good, pc, pp), tok, prev))
+        rows.sort(reverse=True)
+        top = first_per_log([t for _, t, _ in rows], lambda t: loader.scene_frames_dicts[t][3]["log_name"], args.n_top)
+        prev_of = {t: p for _, t, p in rows}
+        chosen[cat] = [(t, prev_of[t]) for t in top]
+    loader2 = scene_loader([t for v in chosen.values() for pair in v for t in pair], Path(args.sensor_path))
     out_root = Path(args.out_dir) / "consecutive"
-    out_root.mkdir(parents=True, exist_ok=True)
-    index = ["# Qualitative: consecutive frames (t − 0.5 s and t), heads selection vs mixture + EC rule", "",
-             f"Model `{args.model}`, scorer `{args.scorer}`. Scenes: heads EC = 0, EC rule EC = 1, both without collision "
-             f"or off-road; top by (heads end-point jump − EC-rule end-point jump), from {len(rows)} candidates "
-             f"(random subset of 400, seed {args.seed}).", "",
-             "| File | Token (t) | previous | heads jump (m) | EC-rule jump (m) | heads PDMS | EC-rule PDMS |",
-             "|---|---|---|---|---|---|---|"]
-    top = rows[: args.n_top]
-    loader2 = scene_loader([t for r in top for t in r[:2]], Path(args.sensor_path))
-    for i, (tok, prev, _, jh, je) in enumerate(top):
-        scene, scene_p = loader2.get_scene_from_token(tok), loader2.get_scene_from_token(prev)
-        tr, _ = rules(tok)
-        trp, _ = rules(prev)
-        fr = loader.scene_frames_dicts[tok]
-        pc, pp = (np.array([fr[k]["ego2global_translation"][0], fr[k]["ego2global_translation"][1],
-                            _yaw(fr[k]["ego2global_rotation"])]) for k in (3, 2))
-        fig = plt.figure(figsize=(15, 9.6))
-        gs = fig.add_gridspec(2, 3, width_ratios=[1.75, 1.0, 1.0], wspace=0.02, hspace=0.12)
-        for r, (label, col) in enumerate([("heads", "#ff7f0e"), ("mixture + EC n64", "#d62728")]):
-            ax_c = fig.add_subplot(gs[r, 0])
-            frame = scene.frames[3]
-            prev_in_cur = to_frame(trp[label][:, :2], pp, pc)
-            draw_camera(ax_c, frame, {label: tr[label]})
-            uv, keep = project(frame.cameras.cam_f0, densify(prev_in_cur), ground_z(frame))
-            ax_c.plot(uv[keep, 0], uv[keep, 1], color=col, linestyle=":", linewidth=2.4, zorder=9)
-            ax_c.set_title(f"{label} at t (solid) and its plan from t − 0.5 s (dotted)", fontsize=9)
-            ax_p = fig.add_subplot(gs[r, 1])
-            draw_bev(ax_p, scene_p, {label: trp[label]})
-            ax_p.set_title(f"t − 0.5 s: {label}", fontsize=9)
-            ax_b = fig.add_subplot(gs[r, 2])
-            draw_bev(ax_b, scene, {label: tr[label]}, extra={"plan from t − 0.5 s": (prev_in_cur, col, ":")})
-            row = (heads if label == "heads" else ecr).loc[tok]
-            ax_b.set_title(f"t: {label}, PDMS {fmt_scores(row)}, end-point jump {jh if label == 'heads' else je:.1f} m",
-                           fontsize=9)
-        fig.suptitle(f"consecutive: {scene_info(scene)} | t {tok}, t − 0.5 s {prev}", fontsize=10, y=0.995)
-        fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.01)
-        f = out_root / f"{i:02d}_{tok}.png"
-        fig.savefig(f, dpi=args.dpi)
-        plt.close(fig)
-        index.append(f"| `{f.relative_to(args.out_dir)}` | {tok} | {prev} | {jh:.1f} | {je:.1f} | "
-                     f"{heads.loc[tok, 'score']:.2f} | {ecr.loc[tok, 'score']:.2f} |")
-        print(f, flush=True)
+    index = ["# Qualitative: consecutive frames (t − 0.5 s and t) under every selection rule", "",
+             f"Model `{args.model}`, scorer `{args.scorer}`. Every panel shows the rule's plan at t (solid) and the "
+             "plan the same rule output at t − 0.5 s (dotted, moved into the frame at t). EC (two-frame extended "
+             "comfort) passes when the two agree. Categories (top by the flipping rule's end-point jump minus its "
+             f"consistency version's, from a random pool of up to 300 scenes, seed {args.seed}):", ""] + \
+            [f"- `{c}`: {d}" for c, (_, _, d) in CONSEC_CATS.items()] + \
+            ["", "| Category | File | Token (t) | previous | " + " | ".join(f"{k} EC / jump" for k in names) + " |",
+             "|---|---|---|---|" + "---|" * len(names)]
+    for cat, pairs in chosen.items():
+        (out_root / cat).mkdir(parents=True, exist_ok=True)
+        for i, (tok, prev) in enumerate(pairs):
+            scene = loader2.get_scene_from_token(tok)
+            tr, _ = rules(tok)
+            trp, _ = rules(prev)
+            fr = loader2.scene_frames_dicts[tok]
+            pc, pp = [np.array([fr[j]["ego2global_translation"][0], fr[j]["ego2global_translation"][1],
+                                _yaw(fr[j]["ego2global_rotation"])]) for j in (3, 2)]
+            prev_in = {k: to_frame(trp[k], pp, pc) for k in names}
+            hum = scene.get_future_trajectory().poses
+            lim = bev_extent({"human": hum, **{k: tr[k] for k in names}}, {k: (v, "k", ":") for k, v in prev_in.items()})
+            fig = plt.figure(figsize=(17, 13.2))
+            gs = fig.add_gridspec(3, 4, height_ratios=[0.62, 1.0, 1.0], hspace=0.22, wspace=0.03)
+            top = gs[0, :].subgridspec(1, 3, wspace=0.01)
+            k_main = CONSEC_CATS[cat][1]
+            three_cameras([fig.add_subplot(top[0, j]) for j in range(3)], scene.frames[3], {"human": hum, k_main: tr[k_main]},
+                          dotted={"prev": (prev_in[k_main], STYLE[k_main][0])})
+            fig.text(0.5, 0.965, f"cameras at t: logged human (black dashed); {RULE_TITLES[k_main].splitlines()[0]} at t "
+                     "(solid) and its plan from t − 0.5 s (dotted)", ha="center", fontsize=9)
+            row_txt = []
+            for r, keys in enumerate(CONSEC_ROWS):
+                for j, k in enumerate(keys):
+                    ax = fig.add_subplot(gs[1 + r, j])
+                    col = STYLE[k][0]
+                    draw_bev(ax, scene, {"human": hum, k: tr[k]}, extra={"t − 0.5 s": (prev_in[k], col, ":")}, lim=lim)
+                    row = scores[k].loc[tok]
+                    passed = row["two_frame_extended_comfort"] == 1
+                    jm = float(np.linalg.norm(prev_in[k][-1, :2] - tr[k][-1, :2]))
+                    ax.set_title(f"{RULE_TITLES[k]}\nEC {'pass' if passed else 'FAIL'} · end point moved {jm:.1f} m · "
+                                 f"EPDMS {fmt_scores(row)}", fontsize=8.5, color="black" if passed else "#b00000")
+                    row_txt.append(f"{'pass' if passed else 'fail'} / {jm:.1f} m")
+            ax = fig.add_subplot(gs[2, 3])
+            hum_prev = to_frame(loader2.get_scene_from_token(prev).get_future_trajectory().poses, pp, pc)
+            draw_bev(ax, scene, {"human": hum}, extra={"t − 0.5 s": (hum_prev, "0.35", ":")}, lim=lim)
+            hrow = human.loc[tok]
+            hpass = hrow["two_frame_extended_comfort"] == 1
+            ax.set_title(f"Logged human (expert driver)\nits trajectory at t (dashed) and at t − 0.5 s (dotted)\n"
+                         f"EC {'pass' if hpass else 'FAIL'} · end point moved "
+                         f"{np.linalg.norm(hum_prev[-1, :2] - hum[-1, :2]):.1f} m · EPDMS {fmt_scores(hrow)}",
+                         fontsize=8.5, color="black" if hpass else "#b00000")
+            ax = fig.add_axes([0.0, 0.0, 1.0, 0.035])
+            ax.axis("off")
+            ax.text(0.5, 0.5, "black dashed: logged human · solid: the rule's plan at t · dotted: the plan the same rule "
+                    "(or the human) output at t − 0.5 s, moved into the frame at t · stars: end points (on the ego = stop) · "
+                    "top row: base rules, bottom row: with the consistency rule · EC passes when the two plans agree in "
+                    "acceleration, jerk, yaw rate and yaw acceleration (RMS) where they overlap, not by end point",
+                    ha="center", va="center", fontsize=8.5, wrap=True, transform=ax.transAxes)
+            fig.suptitle(f"{cat.replace('_', ' ')}: {scene_info(scene)} | t {tok}, t − 0.5 s {prev}", fontsize=10.5,
+                         y=0.995)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.05)
+            f = out_root / cat / f"{i:02d}_{tok}.png"
+            fig.savefig(f, dpi=args.dpi)
+            plt.close(fig)
+            index.append(f"| {cat} | `{f.relative_to(args.out_dir)}` | {tok} | {prev} | " +
+                         " | ".join(f"{scores[k].loc[tok, 'two_frame_extended_comfort']:.0f} / "
+                                    f"{np.linalg.norm(prev_in[k][-1, :2] - tr[k][-1, :2]):.1f} m" for k in names) + " |")
+            print(f, flush=True)
     (out_root / "index.md").write_text("\n".join(index) + "\n")
 
 
@@ -392,6 +576,7 @@ def main():
     p.add_argument("--scorer", default="p3_aux_policy_ep03", help="prediction folder with the scorer's sub-score logits")
     p.add_argument("--heads-eval", default="p3_aux_ep05", help="official score_heads evaluation of the scorer's heads")
     p.add_argument("--ec-folder", default="rl3_b0.005_ep01_own_ecseq_mix10_n64")
+    p.add_argument("--human-eval", default="human_agent_non_reactive", help="pdm_navtest folder of the logged human")
     p.add_argument("--n-top", type=int, default=4)
     p.add_argument("--n-random", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)

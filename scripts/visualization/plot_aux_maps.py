@@ -68,8 +68,10 @@ def show_drv(ax, prob, target, title):
     bev_ax(ax, title)
 
 
-def show_head(ax, m, title):
+def show_head(ax, m, title, mask=None):
     a = np.where(m == NO_LANE, np.nan, (m.astype(float) + 0.5) / BINS * 360 - 180)
+    if mask is not None:  # the decoder outputs a direction everywhere; it is trained (and meaningful) on lanes only
+        a = np.where(mask, a, np.nan)
     im = ax.imshow(a, origin="lower", extent=EXTENT, cmap="twilight_shifted", vmin=-180, vmax=180,
                    interpolation="nearest")
     bev_ax(ax, title)
@@ -115,7 +117,7 @@ def main():
     for i, (tok, log) in enumerate(zip(tokens, logs)):
         scene = loader.get_scene_from_token(tok)
         fig = plt.figure(figsize=(16, 8.2))
-        gs = fig.add_gridspec(2, 6, height_ratios=[1.0, 1.55], hspace=0.12, wspace=0.04)
+        gs = fig.add_gridspec(2, 6, height_ratios=[1.0, 1.55], hspace=0.14, wspace=0.04)
         camera(fig.add_subplot(gs[0, :]), scene)
         show_sem(fig.add_subplot(gs[1, 0]), m["sem_target"][i], "BEV semantics: ground truth")
         show_sem(fig.add_subplot(gs[1, 1]), m["sem_pred"][i], "BEV semantics: predicted")
@@ -123,12 +125,14 @@ def main():
         show_drv(fig.add_subplot(gs[1, 3]), m["drv_prob"][i], m["drv_target"][i],
                  "drivable area: predicted p\n(black: ground-truth edge)")
         show_head(fig.add_subplot(gs[1, 4]), m["head_target"][i], "lane direction: ground truth")
-        im = show_head(fig.add_subplot(gs[1, 5]), m["head_pred"][i], "lane direction: predicted")
-        cb = fig.colorbar(im, ax=fig.axes[-2:], orientation="horizontal", fraction=0.04, pad=0.02)
+        im = show_head(fig.add_subplot(gs[1, 5]), m["head_pred"][i],
+                       "lane direction: predicted\n(shown where predicted drivable p > 0.5)",
+                       mask=m["drv_prob"][i].astype(np.float32) > 0.5)
+        cb = fig.colorbar(im, cax=fig.add_axes([0.70, 0.075, 0.25, 0.018]), orientation="horizontal")
         cb.set_label("travel direction relative to ego heading (deg; 0 = same as ego)", fontsize=8)
         fig.legend(handles=legend, loc="lower left", ncol=6, fontsize=8, frameon=False, bbox_to_anchor=(0.01, 0.0))
-        fig.suptitle(f"aux decoder ({labels[0]}) | {log} | token {tok}", fontsize=10, y=0.995)
-        fig.subplots_adjust(left=0.01, right=0.99, top=0.96, bottom=0.08)
+        fig.suptitle(f"aux decoder of p3_aux ep 5 on backbone: {labels[0]} | {log} | token {tok}", fontsize=10, y=0.995)
+        fig.subplots_adjust(left=0.01, right=0.99, top=0.96, bottom=0.14)
         f = out / f"{i:02d}_{tok}.png"
         fig.savefig(f, dpi=args.dpi)
         plt.close(fig)

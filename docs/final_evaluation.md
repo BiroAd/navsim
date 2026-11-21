@@ -2,7 +2,7 @@
 
 Official PDM scores of the thesis models, from raw camera images through the NAVSIM devkit scripts. The model-selection
 proxy (navtrain val, precomputed codebook scores) is in [checkpoint_evaluation.md](checkpoint_evaluation.md); runs and
-their settings are in [experiments.md](experiments.md). Last updated 2026-11-21: imitation only vs scores with the same start (finding 75); aux vs heads after RL-3, 4 pairs (findings 71-73); rl3_ecshort4 with its own scorer (finding 74); stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
+their settings are in [experiments.md](experiments.md). Last updated 2026-11-22: qualitative results (finding 77); aux decoder and RL-3 drift (finding 76); 2026-11-21: imitation only vs scores with the same start (finding 75); aux vs heads after RL-3, 4 pairs (findings 71-73); rl3_ecshort4 with its own scorer (finding 74); stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
 tables (findings 51-52), RL-3 with GRPO / Dr. GRPO (53-55), 6 seeds of rl3_b0.005 (56-58).
 
 **Current bests (2026-11-14), all from RL-3 β = 0.005 (p3_aux_policy ep 3 + RL-3, some with EC in the reward), human filter on:**
@@ -2127,6 +2127,116 @@ Paired per-scene differences on navtest (n = 12,146, mean ± SE):
         stopped improving (0.7207 at epoch 7, 0.7194 at epoch 9, vs p3_heads_policy's val argmax 0.777), so longer
         imitation training would not close a 0.05 gap.
       - Phase 1 (p1d_total) is shared and itself had the sub-score losses.
+
+### Aux BEV decoder: what it predicts, and whether RL-3 keeps it (2026-11-22)
+
+The aux decoder of p3_aux (BEV semantics, drivable area, lane travel direction; `vision_llm_lora_aux.py`) is trained in
+phase 3 only. The policy stage freezes the backbone, so p3_aux_policy has exactly p3_aux's features. RL-3 trains the
+LoRA again without the aux losses and without the decoder, and its checkpoints do not contain the decoder (0 aux
+tensors, vs 62 in p3_aux ep 5).
+
+Test: p3_aux ep 5's frozen decoder is run on three backbones.
+- Its own (p3_aux ep 5).
+- RL-3 (rl3_b0.005 ep 1): all 620 non-aux trainable tensors swapped in, 596 of them LoRA.
+- p3_heads ep 5 as the floor: the matched phase 3 run without aux losses, so the decoder reads features it was never
+  trained on.
+
+Setup:
+- 3,000 evenly spaced navtrain val scenes, the same for every backbone; targets from the cached
+  `aux_targets_navtrain.sqfs`, which exist for navtrain only, so this is not navtest.
+- `scripts/evaluation/eval_aux_maps.py`; jobs 15315879 and 15316202; outputs `exp/aux_eval/`.
+- p3_aux's own numbers match its training log (W&B, last epoch: mIoU 0.242 batch mean, drivable 0.839, heading 0.860).
+
+| Backbone (decoder: p3_aux ep 5) | BEV mIoU | (batch mean) | drivable-area IoU | lane direction acc (±10°) |
+|---|---|---|---|---|
+| p3_aux ep 5 (own) | **0.228** | 0.220 | **0.841** | **0.865** |
+| RL-3 rl3_b0.005 ep 1 | 0.196 | 0.189 | 0.791 | 0.821 |
+| p3_heads ep 5 (no aux; floor) | 0.108 | 0.096 | 0.552 | 0.513 |
+| RL-3 share of the aux gain above the floor | 73% | | 83% | 87% |
+
+| IoU per class | road | walkways | lane centrelines | static objects | vehicles | pedestrians |
+|---|---|---|---|---|---|---|
+| p3_aux (own) | 0.676 | 0.459 | 0.050 | 0.000 | 0.184 | 0.002 |
+| RL-3 backbone | 0.635 | 0.374 | 0.037 | 0.000 | 0.131 | 0.001 |
+| p3_heads backbone | 0.453 | 0.141 | 0.007 | 0.000 | 0.041 | 0.005 |
+
+Figures in `exp/qualitative/aux/`:
+- `scenes/`: 24 random val scenes, each with the front camera and ground truth vs prediction for semantics, drivable
+  area and lane direction;
+- `drift_backbones.png`: 6 scenes, the decoder's output on the three backbones.
+
+76. **RL-3 keeps most of the perception the aux loss built.**
+    - With RL-3's backbone, the frozen decoder still recovers 73-87% of its advantage over the no-aux floor: drivable
+      area 0.791 of 0.841, lane direction 0.821 of 0.865.
+    - The largest losses are for vehicles (0.184 → 0.131) and walkways (0.459 → 0.374), the classes that move or vary
+      most between scenes. The road layout is mostly kept (0.676 → 0.635).
+    - The floor shows that the decoder needs features trained for it: on p3_heads' features drivable IoU is 0.552 and
+      lane direction 0.513.
+    - This fits findings 71-72: the aux advantage on navtest holds after RL-3 (4/4 pairs) and even grows, so RL-3
+      builds on the aux features instead of replacing them.
+    - The decoder is frozen, so 73-87% is a lower bound on what RL-3's features retain; a decoder retrained on them
+      could recover more.
+    - One RL-3 run (seed 0); the decoder (and hence the drift) exists only for the aux family.
+    - What the decoder gets right and wrong (scene figures): road layout, roundabouts and junction shapes are
+      reproduced well, and the drivable area follows the ground-truth edge; vehicles come out as blobs, and lane
+      centrelines and small objects are mostly missed (IoU ≤ 0.05).
+
+### Qualitative results (2026-11-22)
+
+Figures in `exp/qualitative/` (`scripts/visualization/plot_qualitative.py`, `plot_aux_maps.py`; CPU jobs mounting
+the sensor images); the curated set with a description of every image: `exp/qualitative/selected/README.md`.
+
+**Model.** RL-3 `rl3_b0.005_ep01` with its own scorer `p3_aux_policy_ep03`, navtest.
+
+**Scene selection.** Each category is defined by a fixed rule on the official per-scene navtest v2 scores (EPDMS), with
+at most one scene per log, so no scene is hand-picked.
+
+**Drawing.** Trajectories are drawn from the original 40-step (10 Hz) codebook entries; their poses at 0.5 ... 4.0 s
+are exactly the 8 scored poses (checked: 243 of 243 sampled argmax outputs are codebook entries). The human is drawn
+through its 8 logged poses.
+
+**Check.** The heads-only choice drawn is identical to the one scored by the official `p3_aux_ep05_score_heads` run
+(200 / 200 sampled scenes).
+
+- `rules/<category>/`: one scene, every selection rule. Three front cameras (human + final rule), then one BEV panel
+  per rule at the same zoom with the human, the rule's trajectory, its candidate set and its EPDMS with failed terms.
+  Categories:
+  - `shortlist_rescues`: argmax < 0.3, shortlist ≥ 0.8;
+  - `heads_choice_unsafe`: heads-only ≥ 0.3 below an argmax ≥ 0.8;
+  - `all_rules_safe`;
+  - `beats_human`: best rule ≥ 0.95 while the human ≤ 0.8. There are 17 such scenes; the human loses on driving
+    direction (9), EC (6) or progress (5), never on collision or off-road;
+  - `perfect_turns`: best rule ≥ 0.99 in a turn of > 35°;
+  - `best_rule_fails`: best rule = 0.
+- `consecutive/<category>/`: every rule's plan at t and its own plan from t − 0.5 s moved into the frame at t (base
+  rules, the same rules with the consistency rule, and the logged human). Categories:
+  - `heads_flips`: heads fails EC, mixture + EC passes;
+  - `shortlist_flips`: shortlist fails EC, shortlist + EC passes.
+- `aux/`: the aux decoder (finding 76). `scenes/` shows 24 val scenes, ground truth vs prediction for BEV semantics,
+  drivable area and lane travel direction (lane direction shown where the model predicts drivable area: it is trained
+  on lane cells only); `drift_backbones.png` shows the same decoder on the p3_aux, RL-3 and p3_heads backbones.
+
+77. **What the figures show (mechanisms behind the numbers).**
+    - **The shortlist works as "heads filter, policy chooses."** At a red light or in a queue, argmax and the heads'
+      single best entry collide while the shortlist stops (selected 01-02). Where the mixture keeps argmax's plan,
+      only the hard shortlist rescues the scene (02); this is why the shortlist base wins on navhard (finding 57).
+    - **The heads alone are a poor chooser.**
+      - Behind a slow vehicle their best-scored entry can collide (03).
+      - At low-speed turns they go straight. Below 5 m of reference progress NAVSIM sets ego progress to 1 for every
+        plan (`pdm_scorer.py:234`), so this costs only EC (04-05).
+      - Between frames their choice jumps by up to 15-22 m (09); the policy-based rules move 2-3 m, as the human does
+        (3 m, EC pass).
+    - **The consistency rule fixes EC for every base rule, including the shortlist** (10: shortlist 14.6 m → 1.6 m).
+      EC compares acceleration, jerk, yaw rate and yaw acceleration (RMS differences), not end points, so a 1.2 m move
+      can fail and a 1.6 m move pass.
+    - **"Beating the human" is mostly metric-specific.** In the 17 scenes where the best rule ≥ 0.95 and the human
+      ≤ 0.8, the human loses on driving direction (passing a parked van, swinging wide in a right turn), on comfort or
+      on progress, never on collision or off-road (06-07).
+    - **Remaining failures are model limits.** At speed, every policy-based plan can be too fast for the lead
+      vehicle, even inside the shortlist, while the heads-only choice brakes (08). The policy's preference can
+      override the heads' safety signal.
+    - **The aux decoder reproduces road layout, junctions and the drivable edge; vehicles come out as blobs.** On
+      RL-3's backbone the maps are nearly unchanged, on p3_heads' they are blurred (finding 76).
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 
