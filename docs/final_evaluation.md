@@ -2,7 +2,7 @@
 
 Official PDM scores of the thesis models, from raw camera images through the NAVSIM devkit scripts. The model-selection
 proxy (navtrain val, precomputed codebook scores) is in [checkpoint_evaluation.md](checkpoint_evaluation.md); runs and
-their settings are in [experiments.md](experiments.md). Last updated 2026-11-21: stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
+their settings are in [experiments.md](experiments.md). Last updated 2026-11-21: aux vs heads after RL-3, 4 pairs (findings 71-73); rl3_ecshort4 with its own scorer (finding 74); stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
 tables (findings 51-52), RL-3 with GRPO / Dr. GRPO (53-55), 6 seeds of rl3_b0.005 (56-58).
 
 **Current bests (2026-11-14), all from RL-3 β = 0.005 (p3_aux_policy ep 3 + RL-3, some with EC in the reward), human filter on:**
@@ -1691,6 +1691,378 @@ brackets, the mean ± SD over the 4 seed replicates (stage 2/3: findings 59-64; 
       are 6-24× the seed SDs, but stage 2 → 3 with k 256 (+0.012) is within the k 256 seed SD (0.015). With k 64
       (+0.023, SD 0.006) the step is clear. The stage 1 seed spread is UNKNOWN (one run); the stage 1 → 2 steps are
       20-100× the stage 2 SDs.
+
+### aux vs heads after RL-3: 4 matched pairs (2026-11-21)
+
+Question: does the aux-loss advantage of stages 2 and 3 (findings 59-64) survive RL-3, which evens out differences
+between start models of one family (finding 66)?
+
+Runs:
+- heads family: `rl3_heads_b0.005_ep01` (seed 0, start p3_heads_policy ep 2) and `rl3_heads_b0.005_pipe_s{1,2,3}_ep01`
+  (start p3_heads_policy_s1 ep 3, s2 ep 2, s3 ep 3; `++seed=N`);
+- aux family: rl3_b0.005_ep01 and rl3_b0.005_pipe_s1-s3 (finding 65).
+
+Same RL-3 recipe for both families (composed overrides checked), epoch 1, each run scored with its own start model's
+heads. Jobs in experiments.md; all completed, 12,146 valid navtest scenes and 0 invalid navhard scenes in every
+result. End-of-training val argmax: heads 0.8403-0.8474 vs aux 0.8548-0.8576. Collector
+`exp/rl3_logs/collect_rl3_aux_vs_heads.py`; all values `FAMILY=heads exp/rl3_logs/dump_rl3_pipeline_full.py`.
+
+Heads family after RL-3 (4 runs):
+
+| Metric (own heads) | seed 0 | pipe s1 | pipe s2 | pipe s3 | mean ± SD | range |
+|---|---|---|---|---|---|---|
+| navtest v2 argmax | 0.8775 | 0.8816 | 0.8804 | 0.8821 | 0.8804 ± 0.0021 | 0.8775-0.8821 |
+| navtest EC (argmax) | 0.775 | 0.767 | 0.773 | 0.786 | 0.775 ± 0.008 | 0.767-0.786 |
+| navtest v2 shortlist k 256 | 0.8708 | 0.8736 | 0.8741 | 0.8720 | 0.8726 ± 0.0015 | 0.8708-0.8741 |
+| navtest v2 mixture λ 10 | 0.8801 | 0.8839 | 0.8828 | 0.8850 | 0.8830 ± 0.0021 | 0.8801-0.8850 |
+| navtest v2 EC rule, argmax base n 16 | 0.8882 | 0.8902 | 0.8901 | 0.8910 | 0.8899 ± 0.0012 | 0.8882-0.8910 |
+| navtest v2 EC rule, argmax base n 64 | 0.8902 | 0.8918 | 0.8904 | 0.8926 | 0.8913 ± 0.0012 | 0.8902-0.8926 |
+| navtest v2 EC rule, short256 base n 16 | 0.8807 | 0.8839 | 0.8849 | 0.8819 | 0.8828 ± 0.0019 | 0.8807-0.8849 |
+| navtest v2 EC rule, short256 base n 64 | 0.8824 | 0.8852 | 0.8873 | 0.8838 | 0.8847 ± 0.0021 | 0.8824-0.8873 |
+| navtest v2 EC rule, mix10 base n 16 | 0.8911 | 0.8923 | 0.8936 | 0.8942 | 0.8928 ± 0.0014 | 0.8911-0.8942 |
+| navtest v2 EC rule, mix10 base n 64 | 0.8924 | 0.8948 | 0.8946 | 0.8957 | 0.8944 ± 0.0014 | 0.8924-0.8957 |
+| navtest v1 argmax | 0.9017 | 0.9060 | 0.9042 | 0.9044 | 0.9041 ± 0.0018 | 0.9017-0.9060 |
+| navtest v1 shortlist_v1 k 256 | 0.8996 | 0.9026 | 0.9015 | 0.8999 | 0.9009 ± 0.0014 | 0.8996-0.9026 |
+| navtest v1 mixture_v1 λ 10 | 0.9058 | 0.9084 | 0.9065 | 0.9084 | 0.9073 ± 0.0013 | 0.9058-0.9084 |
+| navhard argmax | 0.359 | 0.348 | 0.350 | 0.349 | 0.351 ± 0.005 | 0.348-0.359 |
+| navhard shortlist k 256 | 0.395 | 0.405 | 0.384 | 0.390 | 0.394 ± 0.009 | 0.384-0.405 |
+| navhard shortlist k 256 stage one | 0.750 | 0.759 | 0.742 | 0.741 | 0.748 ± 0.008 | 0.741-0.759 |
+| navhard shortlist k 256 stage two | 0.517 | 0.528 | 0.505 | 0.520 | 0.518 ± 0.010 | 0.505-0.528 |
+| navhard EC rule, argmax base n 16 | 0.380 | 0.367 | 0.367 | 0.360 | 0.369 ± 0.008 | 0.360-0.380 |
+| navhard EC rule, argmax base n 64 | 0.383 | 0.373 | 0.371 | 0.372 | 0.375 ± 0.005 | 0.371-0.383 |
+| navhard EC rule, short256 base n 16 | 0.414 | 0.422 | 0.410 | 0.402 | 0.412 ± 0.008 | 0.402-0.422 |
+| navhard EC rule, short256 base n 64 | 0.417 | 0.430 | 0.420 | 0.407 | 0.419 ± 0.010 | 0.407-0.430 |
+| navhard EC rule, mix10 base n 16 | 0.404 | 0.386 | 0.396 | 0.378 | 0.391 ± 0.011 | 0.378-0.404 |
+| navhard EC rule, mix10 base n 64 | 0.407 | 0.392 | 0.401 | 0.386 | 0.397 ± 0.009 | 0.386-0.407 |
+
+Paired aux − heads after RL-3 (mean ± SE over the 4 pairs, SE = SD / 2):
+
+| Metric (own heads) | Δ seed 0 | Δ s1 | Δ s2 | Δ s3 | mean Δ ± SE | aux > heads | aux mean ± SD | heads mean ± SD |
+|---|---|---|---|---|---|---|---|---|
+| navtest v2 argmax | +0.0145 | +0.0089 | +0.0089 | +0.0116 | +0.0110 ± 0.0013 | 4/4 | 0.8914 ± 0.0019 | 0.8804 ± 0.0021 |
+| navtest EC (argmax) | +0.005 | -0.001 | -0.015 | -0.015 | -0.006 ± 0.005 | 1/4 | 0.769 ± 0.009 | 0.775 ± 0.008 |
+| navtest v2 shortlist k 256 | +0.0121 | +0.0082 | +0.0081 | +0.0112 | +0.0099 ± 0.0010 | 4/4 | 0.8825 ± 0.0007 | 0.8726 ± 0.0015 |
+| navtest v2 mixture λ 10 | +0.0146 | +0.0093 | +0.0104 | +0.0105 | +0.0112 ± 0.0012 | 4/4 | 0.8942 ± 0.0012 | 0.8830 ± 0.0021 |
+| navtest v2 EC rule, argmax base n 16 | +0.0130 | +0.0098 | +0.0095 | +0.0115 | +0.0110 ± 0.0008 | 4/4 | 0.9008 ± 0.0013 | 0.8899 ± 0.0012 |
+| navtest v2 EC rule, argmax base n 64 | +0.0125 | +0.0089 | +0.0099 | +0.0116 | +0.0107 ± 0.0008 | 4/4 | 0.9020 ± 0.0018 | 0.8913 ± 0.0012 |
+| navtest v2 EC rule, short256 base n 16 | +0.0118 | +0.0073 | +0.0079 | +0.0109 | +0.0095 ± 0.0011 | 4/4 | 0.8923 ± 0.0008 | 0.8828 ± 0.0019 |
+| navtest v2 EC rule, short256 base n 64 | +0.0118 | +0.0075 | +0.0078 | +0.0106 | +0.0094 ± 0.0011 | 4/4 | 0.8941 ± 0.0010 | 0.8847 ± 0.0021 |
+| navtest v2 EC rule, mix10 base n 16 | +0.0130 | +0.0111 | +0.0103 | +0.0123 | +0.0117 ± 0.0006 | 4/4 | 0.9045 ± 0.0014 | 0.8928 ± 0.0014 |
+| navtest v2 EC rule, mix10 base n 64 | +0.0138 | +0.0103 | +0.0110 | +0.0129 | +0.0120 ± 0.0008 | 4/4 | 0.9064 ± 0.0016 | 0.8944 ± 0.0014 |
+| navtest v1 argmax | +0.0126 | +0.0077 | +0.0094 | +0.0125 | +0.0106 ± 0.0012 | 4/4 | 0.9146 ± 0.0015 | 0.9041 ± 0.0018 |
+| navtest v1 shortlist_v1 k 256 | +0.0114 | +0.0076 | +0.0087 | +0.0102 | +0.0095 ± 0.0008 | 4/4 | 0.9104 ± 0.0004 | 0.9009 ± 0.0014 |
+| navtest v1 mixture_v1 λ 10 | +0.0120 | +0.0096 | +0.0118 | +0.0106 | +0.0110 ± 0.0006 | 4/4 | 0.9183 ± 0.0005 | 0.9073 ± 0.0013 |
+| navhard argmax | +0.006 | +0.025 | +0.017 | +0.005 | +0.013 ± 0.005 | 4/4 | 0.365 ± 0.008 | 0.351 ± 0.005 |
+| navhard shortlist k 256 | +0.017 | -0.006 | +0.026 | +0.010 | +0.012 ± 0.007 | 3/4 | 0.405 ± 0.006 | 0.394 ± 0.009 |
+| navhard shortlist k 256 stage one | +0.015 | +0.005 | +0.024 | +0.016 | +0.015 ± 0.004 | 4/4 | 0.763 ± 0.004 | 0.748 ± 0.008 |
+| navhard shortlist k 256 stage two | +0.016 | -0.014 | +0.022 | -0.000 | +0.006 ± 0.008 | 2/4 | 0.524 ± 0.008 | 0.518 ± 0.010 |
+| navhard EC rule, argmax base n 16 | +0.011 | +0.027 | +0.023 | +0.033 | +0.024 ± 0.005 | 4/4 | 0.392 ± 0.002 | 0.369 ± 0.008 |
+| navhard EC rule, argmax base n 64 | +0.011 | +0.024 | +0.023 | +0.024 | +0.021 ± 0.003 | 4/4 | 0.395 ± 0.002 | 0.375 ± 0.005 |
+| navhard EC rule, short256 base n 16 | +0.020 | -0.002 | +0.026 | +0.024 | +0.017 ± 0.007 | 3/4 | 0.429 ± 0.008 | 0.412 ± 0.008 |
+| navhard EC rule, short256 base n 64 | +0.017 | -0.003 | +0.025 | +0.027 | +0.016 ± 0.007 | 3/4 | 0.435 ± 0.007 | 0.419 ± 0.010 |
+| navhard EC rule, mix10 base n 16 | +0.013 | +0.021 | +0.018 | +0.039 | +0.023 ± 0.006 | 4/4 | 0.414 ± 0.005 | 0.391 ± 0.011 |
+| navhard EC rule, mix10 base n 64 | +0.015 | +0.021 | +0.020 | +0.035 | +0.023 ± 0.004 | 4/4 | 0.419 ± 0.004 | 0.397 ± 0.009 |
+
+RL-3 gain of the heads family, and the aux − heads gap at stage 3 (finding 62) vs after RL-3 ("change of gap": after
+− before, per pair; in brackets the pairs whose gap shrank):
+
+| Metric | heads start mean ± SD | heads RL-3 mean ± SD | heads gain mean ± SD | gap before (stage 3) mean ± SE | gap after mean ± SE | change of gap mean ± SE (pairs with smaller gap) |
+|---|---|---|---|---|---|---|
+| navtest v2 argmax | 0.8344 ± 0.0016 | 0.8804 ± 0.0021 | +0.0460 ± 0.0014 | +0.0083 ± 0.0013 | +0.0110 ± 0.0013 | +0.0027 ± 0.0015 (1/4) |
+| navtest v2 shortlist k 256 | 0.8619 ± 0.0024 | 0.8726 ± 0.0015 | +0.0108 ± 0.0011 | +0.0056 ± 0.0013 | +0.0099 ± 0.0010 | +0.0043 ± 0.0004 (0/4) |
+| navtest v1 argmax | 0.8540 ± 0.0014 | 0.9041 ± 0.0018 | +0.0501 ± 0.0013 | +0.0082 ± 0.0015 | +0.0106 ± 0.0012 | +0.0024 ± 0.0022 (1/4) |
+| navtest v1 shortlist_v1 k 256 | 0.8863 ± 0.0021 | 0.9009 ± 0.0014 | +0.0146 ± 0.0009 | +0.0070 ± 0.0009 | +0.0095 ± 0.0008 | +0.0025 ± 0.0003 (0/4) |
+| navhard argmax | 0.244 ± 0.007 | 0.351 ± 0.005 | +0.107 ± 0.012 | +0.013 ± 0.003 | +0.013 ± 0.005 | +0.000 ± 0.006 (2/4) |
+| navhard shortlist k 256 | 0.352 ± 0.012 | 0.394 ± 0.009 | +0.041 ± 0.014 | +0.020 ± 0.010 | +0.012 ± 0.007 | -0.008 ± 0.012 (2/4) |
+
+Per pair (aux − heads, stage 3 → RL-3):
+
+| Metric | seed 0 | s1 | s2 | s3 |
+|---|---|---|---|---|
+| navtest v2 argmax | +0.0111 → +0.0145 | +0.0095 → +0.0089 | +0.0074 → +0.0089 | +0.0050 → +0.0116 |
+| navtest v2 shortlist k 256 | +0.0089 → +0.0121 | +0.0032 → +0.0082 | +0.0036 → +0.0081 | +0.0066 → +0.0112 |
+| navtest v1 argmax | +0.0107 → +0.0126 | +0.0103 → +0.0077 | +0.0071 → +0.0094 | +0.0045 → +0.0125 |
+| navtest v1 shortlist_v1 k 256 | +0.0086 → +0.0114 | +0.0056 → +0.0076 | +0.0054 → +0.0087 | +0.0083 → +0.0102 |
+| navhard argmax | +0.020 → +0.006 | +0.009 → +0.025 | +0.015 → +0.017 | +0.007 → +0.005 |
+| navhard shortlist k 256 | +0.049 → +0.017 | +0.018 → -0.006 | +0.010 → +0.026 | +0.003 → +0.010 |
+
+Heads family, per run (start → RL-3):
+
+| Metric | seed 0 | s1 | s2 | s3 |
+|---|---|---|---|---|
+| navtest v2 argmax | 0.8322 → 0.8775 (+0.0453) | 0.8343 → 0.8816 (+0.0473) | 0.8361 → 0.8804 (+0.0443) | 0.8351 → 0.8821 (+0.0471) |
+| navtest v2 shortlist k 256 | 0.8585 → 0.8708 (+0.0123) | 0.8634 → 0.8736 (+0.0102) | 0.8636 → 0.8741 (+0.0105) | 0.8619 → 0.8720 (+0.0101) |
+| navtest v1 argmax | 0.8520 → 0.9017 (+0.0497) | 0.8540 → 0.9060 (+0.0520) | 0.8553 → 0.9042 (+0.0489) | 0.8547 → 0.9044 (+0.0497) |
+| navtest v1 shortlist_v1 k 256 | 0.8838 → 0.8996 (+0.0158) | 0.8888 → 0.9026 (+0.0138) | 0.8869 → 0.9015 (+0.0146) | 0.8858 → 0.8999 (+0.0141) |
+| navhard argmax | 0.234 → 0.359 (+0.125) | 0.247 → 0.348 (+0.101) | 0.247 → 0.350 (+0.102) | 0.249 → 0.349 (+0.100) |
+| navhard shortlist k 256 | 0.337 → 0.395 (+0.058) | 0.363 → 0.405 (+0.043) | 0.360 → 0.384 (+0.024) | 0.350 → 0.390 (+0.040) |
+
+71. **The aux advantage survives RL-3, and on navtest it grows.**
+    - navtest: aux > heads in 4/4 pairs under every rule, by +0.009 to +0.012 (SE ≤ 0.0013), i.e. 8-20 SE:
+      - v2 mixture + EC n 64: 0.9064 vs 0.8944, +0.0120 ± 0.0008;
+      - v1 mixture_v1: 0.9183 vs 0.9073, +0.0110 ± 0.0006.
+    - The gap is larger than at stage 3 in every pair for the shortlist rules (v2 k 256: +0.0056 → +0.0099,
+      change +0.0043 ± 0.0004, 4/4; v1 shortlist_v1: +0.0070 → +0.0095, 4/4). For argmax it is larger in 3 of 4
+      pairs (+0.0027 ± 0.0015).
+    - So RL-3 evens out start models within a family (finding 66) but not the difference between the families.
+      The heads family also gains less from RL-3 under the shortlist (v2 k 256 +0.011 vs +0.015), whose scorer is its
+      own weaker heads.
+72. **navhard: the advantage holds, but with the usual noise.**
+    - aux > heads in 4/4 pairs for argmax (+0.013 ± 0.005) and for the EC rule on the argmax and mixture bases
+      (+0.021 to +0.024, SE 0.003-0.006).
+    - 3/4 pairs for the shortlist rules: shortlist k 256 +0.012 ± 0.007, shortlist + EC n 64 +0.016 ± 0.007. The
+      exception is pair s1, at −0.006 / −0.003.
+    - The gain is in stage one (k 256: +0.015 ± 0.004, 4/4); stage two is mixed (+0.006 ± 0.008, 2/4).
+    - The navhard gap does not change measurably through RL-3 (k 256: +0.020 → +0.012, change −0.008 ± 0.012).
+    - Thesis numbers, best rule each: navhard 0.435 ± 0.007 (aux) vs 0.419 ± 0.010 (heads).
+73. **RL-3 gains and spreads are alike in both families.**
+    - Heads gains: navtest v2 argmax +0.046 ± 0.001 (aux +0.049), v1 argmax +0.050 (aux +0.053), navhard argmax
+      +0.107 ± 0.012 (aux +0.107), navhard k 256 +0.041 ± 0.014 (aux +0.033).
+    - As in the aux family, the weakest stage 3 start model gains most on navhard k 256 (seed 0: 0.337 → 0.395,
+      +0.058).
+    - Heads seed SDs after RL-3: navtest v2 0.0012-0.0021, v1 0.0013-0.0018, navhard 0.005-0.011. These are in the
+      range of the aux family's (finding 65).
+
+#### All values of the four heads RL-3 runs
+
+Same layout as "All values of the four pipeline runs" above (seed 0 = rl3_heads_b0.005_ep01). The val history and
+job accounting are in experiments.md.
+
+##### A. navtest v2 (non-reactive; EPDMS; every rule; own heads as scorer)
+
+| Run | Rule | PDMS | NC | DAC | DDC | TLC | EP | TTC | LK | HC | EC | valid | score 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed 0 | argmax | **0.8775** | 0.9741 | 0.9722 | 0.9914 | 0.9984 | 0.8933 | 0.9678 | 0.9509 | 0.9829 | 0.7748 | 12146 | 5.51% |
+| pipe s1 | argmax | **0.8816** | 0.9756 | 0.9781 | 0.9916 | 0.9986 | 0.8876 | 0.9692 | 0.9504 | 0.9831 | 0.7665 | 12146 | 4.78% |
+| pipe s2 | argmax | **0.8804** | 0.9764 | 0.9747 | 0.9926 | 0.9985 | 0.8896 | 0.9695 | 0.9532 | 0.9830 | 0.7731 | 12146 | 5.06% |
+| pipe s3 | argmax | **0.8821** | 0.9766 | 0.9752 | 0.9924 | 0.9988 | 0.8878 | 0.9700 | 0.9516 | 0.9831 | 0.7861 | 12146 | 4.99% |
+| seed 0 | shortlist k 256 | **0.8708** | 0.9755 | 0.9802 | 0.9939 | 0.9987 | 0.8651 | 0.9681 | 0.9440 | 0.9795 | 0.7230 | 12146 | 4.56% |
+| pipe s1 | shortlist k 256 | **0.8736** | 0.9760 | 0.9830 | 0.9948 | 0.9984 | 0.8650 | 0.9692 | 0.9451 | 0.9813 | 0.7171 | 12146 | 4.28% |
+| pipe s2 | shortlist k 256 | **0.8741** | 0.9769 | 0.9825 | 0.9943 | 0.9989 | 0.8643 | 0.9689 | 0.9434 | 0.9807 | 0.7196 | 12146 | 4.14% |
+| pipe s3 | shortlist k 256 | **0.8720** | 0.9779 | 0.9816 | 0.9939 | 0.9988 | 0.8560 | 0.9707 | 0.9411 | 0.9785 | 0.7183 | 12146 | 4.13% |
+| seed 0 | shortlist_v1 k 256 | **0.8713** | 0.9746 | 0.9799 | 0.9909 | 0.9977 | 0.8773 | 0.9668 | 0.9409 | 0.9813 | 0.7321 | 12146 | 4.87% |
+| pipe s1 | shortlist_v1 k 256 | **0.8736** | 0.9749 | 0.9825 | 0.9917 | 0.9979 | 0.8767 | 0.9685 | 0.9421 | 0.9821 | 0.7245 | 12146 | 4.64% |
+| pipe s2 | shortlist_v1 k 256 | **0.8735** | 0.9755 | 0.9809 | 0.9922 | 0.9978 | 0.8761 | 0.9681 | 0.9420 | 0.9821 | 0.7282 | 12146 | 4.65% |
+| pipe s3 | shortlist_v1 k 256 | **0.8730** | 0.9767 | 0.9805 | 0.9911 | 0.9982 | 0.8695 | 0.9702 | 0.9389 | 0.9811 | 0.7315 | 12146 | 4.53% |
+| seed 0 | mixture λ 10 | **0.8801** | 0.9757 | 0.9751 | 0.9922 | 0.9988 | 0.8879 | 0.9695 | 0.9484 | 0.9827 | 0.7743 | 12146 | 5.03% |
+| pipe s1 | mixture λ 10 | **0.8839** | 0.9778 | 0.9813 | 0.9931 | 0.9986 | 0.8823 | 0.9707 | 0.9498 | 0.9834 | 0.7651 | 12146 | 4.25% |
+| pipe s2 | mixture λ 10 | **0.8828** | 0.9767 | 0.9794 | 0.9939 | 0.9987 | 0.8843 | 0.9701 | 0.9494 | 0.9830 | 0.7673 | 12146 | 4.48% |
+| pipe s3 | mixture λ 10 | **0.8850** | 0.9793 | 0.9783 | 0.9928 | 0.9988 | 0.8821 | 0.9733 | 0.9480 | 0.9830 | 0.7829 | 12146 | 4.38% |
+| seed 0 | mixture_v1 λ 10 | **0.8813** | 0.9755 | 0.9765 | 0.9911 | 0.9987 | 0.8899 | 0.9697 | 0.9476 | 0.9828 | 0.7759 | 12146 | 4.96% |
+| pipe s1 | mixture_v1 λ 10 | **0.8836** | 0.9771 | 0.9813 | 0.9924 | 0.9986 | 0.8844 | 0.9704 | 0.9489 | 0.9835 | 0.7653 | 12146 | 4.36% |
+| pipe s2 | mixture_v1 λ 10 | **0.8819** | 0.9758 | 0.9792 | 0.9930 | 0.9986 | 0.8864 | 0.9694 | 0.9496 | 0.9831 | 0.7669 | 12146 | 4.65% |
+| pipe s3 | mixture_v1 λ 10 | **0.8852** | 0.9787 | 0.9789 | 0.9917 | 0.9987 | 0.8842 | 0.9727 | 0.9483 | 0.9831 | 0.7849 | 12146 | 4.45% |
+| seed 0 | EC rule (seq), argmax base n 16 | **0.8882** | 0.9745 | 0.9720 | 0.9912 | 0.9984 | 0.8934 | 0.9680 | 0.9518 | 0.9831 | 0.8843 | 12146 | 5.48% |
+| pipe s1 | EC rule (seq), argmax base n 16 | **0.8902** | 0.9753 | 0.9755 | 0.9913 | 0.9986 | 0.8879 | 0.9685 | 0.9513 | 0.9833 | 0.8777 | 12146 | 5.06% |
+| pipe s2 | EC rule (seq), argmax base n 16 | **0.8901** | 0.9765 | 0.9737 | 0.9921 | 0.9984 | 0.8897 | 0.9694 | 0.9531 | 0.9830 | 0.8831 | 12146 | 5.15% |
+| pipe s3 | EC rule (seq), argmax base n 16 | **0.8910** | 0.9768 | 0.9741 | 0.9920 | 0.9988 | 0.8882 | 0.9698 | 0.9517 | 0.9830 | 0.8893 | 12146 | 5.10% |
+| seed 0 | EC rule (seq), argmax base n 64 | **0.8902** | 0.9746 | 0.9711 | 0.9909 | 0.9984 | 0.8931 | 0.9676 | 0.9513 | 0.9831 | 0.9151 | 12146 | 5.55% |
+| pipe s1 | EC rule (seq), argmax base n 64 | **0.8918** | 0.9751 | 0.9736 | 0.9912 | 0.9987 | 0.8877 | 0.9685 | 0.9508 | 0.9833 | 0.9159 | 12146 | 5.28% |
+| pipe s2 | EC rule (seq), argmax base n 64 | **0.8904** | 0.9760 | 0.9711 | 0.9919 | 0.9984 | 0.8895 | 0.9690 | 0.9516 | 0.9830 | 0.9182 | 12146 | 5.48% |
+| pipe s3 | EC rule (seq), argmax base n 64 | **0.8926** | 0.9770 | 0.9723 | 0.9918 | 0.9988 | 0.8882 | 0.9704 | 0.9518 | 0.9831 | 0.9221 | 12146 | 5.28% |
+| seed 0 | EC rule (seq), shortlist base n 16 | **0.8807** | 0.9756 | 0.9793 | 0.9942 | 0.9986 | 0.8633 | 0.9679 | 0.9438 | 0.9793 | 0.8366 | 12146 | 4.64% |
+| pipe s1 | EC rule (seq), shortlist base n 16 | **0.8839** | 0.9758 | 0.9825 | 0.9950 | 0.9984 | 0.8636 | 0.9690 | 0.9446 | 0.9811 | 0.8311 | 12146 | 4.33% |
+| pipe s2 | EC rule (seq), shortlist base n 16 | **0.8849** | 0.9767 | 0.9825 | 0.9945 | 0.9989 | 0.8628 | 0.9687 | 0.9435 | 0.9806 | 0.8320 | 12146 | 4.14% |
+| pipe s3 | EC rule (seq), shortlist base n 16 | **0.8819** | 0.9784 | 0.9807 | 0.9943 | 0.9988 | 0.8537 | 0.9705 | 0.9409 | 0.9783 | 0.8296 | 12146 | 4.17% |
+| seed 0 | EC rule (seq), shortlist base n 64 | **0.8824** | 0.9755 | 0.9787 | 0.9943 | 0.9986 | 0.8614 | 0.9675 | 0.9434 | 0.9793 | 0.8673 | 12146 | 4.73% |
+| pipe s1 | EC rule (seq), shortlist base n 64 | **0.8852** | 0.9754 | 0.9817 | 0.9951 | 0.9984 | 0.8616 | 0.9683 | 0.9446 | 0.9808 | 0.8615 | 12146 | 4.45% |
+| pipe s2 | EC rule (seq), shortlist base n 64 | **0.8873** | 0.9769 | 0.9822 | 0.9949 | 0.9989 | 0.8604 | 0.9689 | 0.9441 | 0.9804 | 0.8643 | 12146 | 4.17% |
+| pipe s3 | EC rule (seq), shortlist base n 64 | **0.8838** | 0.9784 | 0.9802 | 0.9944 | 0.9988 | 0.8519 | 0.9703 | 0.9412 | 0.9781 | 0.8587 | 12146 | 4.22% |
+| seed 0 | EC rule (seq), mixture base n 16 | **0.8911** | 0.9759 | 0.9754 | 0.9917 | 0.9987 | 0.8883 | 0.9696 | 0.9499 | 0.9829 | 0.8865 | 12146 | 5.01% |
+| pipe s1 | EC rule (seq), mixture base n 16 | **0.8923** | 0.9767 | 0.9793 | 0.9928 | 0.9986 | 0.8831 | 0.9697 | 0.9495 | 0.9834 | 0.8765 | 12146 | 4.55% |
+| pipe s2 | EC rule (seq), mixture base n 16 | **0.8936** | 0.9763 | 0.9794 | 0.9937 | 0.9986 | 0.8845 | 0.9696 | 0.9495 | 0.9828 | 0.8815 | 12146 | 4.53% |
+| pipe s3 | EC rule (seq), mixture base n 16 | **0.8942** | 0.9792 | 0.9767 | 0.9925 | 0.9988 | 0.8826 | 0.9731 | 0.9481 | 0.9829 | 0.8921 | 12146 | 4.56% |
+| seed 0 | EC rule (seq), mixture base n 64 | **0.8924** | 0.9756 | 0.9739 | 0.9917 | 0.9987 | 0.8876 | 0.9692 | 0.9494 | 0.9830 | 0.9197 | 12146 | 5.19% |
+| pipe s1 | EC rule (seq), mixture base n 64 | **0.8948** | 0.9766 | 0.9778 | 0.9929 | 0.9987 | 0.8826 | 0.9696 | 0.9490 | 0.9833 | 0.9150 | 12146 | 4.69% |
+| pipe s2 | EC rule (seq), mixture base n 64 | **0.8946** | 0.9760 | 0.9777 | 0.9934 | 0.9986 | 0.8843 | 0.9694 | 0.9489 | 0.9829 | 0.9172 | 12146 | 4.76% |
+| pipe s3 | EC rule (seq), mixture base n 64 | **0.8957** | 0.9792 | 0.9751 | 0.9924 | 0.9988 | 0.8822 | 0.9733 | 0.9476 | 0.9830 | 0.9255 | 12146 | 4.72% |
+
+##### B. navtest v1 (v1 PDMS = NC · DAC · (5 EP + 5 TTC + 2 C) / 12; C = v1 comfort or history comfort)
+
+| Run | Rule | **v1 PDMS (v1 comfort)** | v1 PDMS (HC) | NC | DAC | TTC | EP | v1 comfort | HC | scenes | score 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed 0 | argmax | **0.9017** | 0.9001 | 0.9741 | 0.9722 | 0.9678 | 0.8933 | 0.9936 | 0.9829 | 12146 | 5.19% |
+| pipe s1 | argmax | **0.9060** | 0.9047 | 0.9756 | 0.9781 | 0.9692 | 0.8876 | 0.9923 | 0.9831 | 12146 | 4.45% |
+| pipe s2 | argmax | **0.9042** | 0.9025 | 0.9764 | 0.9747 | 0.9695 | 0.8896 | 0.9943 | 0.9830 | 12146 | 4.75% |
+| pipe s3 | argmax | **0.9044** | 0.9028 | 0.9766 | 0.9752 | 0.9700 | 0.8878 | 0.9934 | 0.9831 | 12146 | 4.70% |
+| seed 0 | shortlist_v1 k 256 | **0.8996** | 0.8997 | 0.9746 | 0.9799 | 0.9668 | 0.8773 | 0.9811 | 0.9813 | 12146 | 4.45% |
+| pipe s1 | shortlist_v1 k 256 | **0.9026** | 0.9027 | 0.9749 | 0.9825 | 0.9685 | 0.8767 | 0.9813 | 0.9821 | 12146 | 4.17% |
+| pipe s2 | shortlist_v1 k 256 | **0.9015** | 0.9014 | 0.9755 | 0.9809 | 0.9681 | 0.8761 | 0.9832 | 0.9821 | 12146 | 4.25% |
+| pipe s3 | shortlist_v1 k 256 | **0.8999** | 0.9002 | 0.9767 | 0.9805 | 0.9702 | 0.8695 | 0.9788 | 0.9811 | 12146 | 4.16% |
+| seed 0 | mixture_v1 λ 10 | **0.9058** | 0.9042 | 0.9755 | 0.9765 | 0.9697 | 0.8899 | 0.9933 | 0.9828 | 12146 | 4.65% |
+| pipe s1 | mixture_v1 λ 10 | **0.9084** | 0.9072 | 0.9771 | 0.9813 | 0.9704 | 0.8844 | 0.9914 | 0.9835 | 12146 | 4.04% |
+| pipe s2 | mixture_v1 λ 10 | **0.9065** | 0.9050 | 0.9758 | 0.9792 | 0.9694 | 0.8864 | 0.9930 | 0.9831 | 12146 | 4.36% |
+| pipe s3 | mixture_v1 λ 10 | **0.9084** | 0.9069 | 0.9787 | 0.9789 | 0.9727 | 0.8842 | 0.9926 | 0.9831 | 12146 | 4.14% |
+
+##### C. navhard two-stage (reactive; EPDMS combined / stage one / stage two, sub-scores per stage)
+
+| Run | Rule | **combined** | stage one | stage two | scenes (invalid) |
+|---|---|---|---|---|---|
+| seed 0 | argmax | **0.3590** | 0.7561 | 0.4695 | 5912 (0) |
+| pipe s1 | argmax | **0.3484** | 0.7512 | 0.4576 | 5912 (0) |
+| pipe s2 | argmax | **0.3498** | 0.7479 | 0.4521 | 5912 (0) |
+| pipe s3 | argmax | **0.3486** | 0.7659 | 0.4522 | 5912 (0) |
+| seed 0 | shortlist k 256 | **0.3948** | 0.7496 | 0.5168 | 5912 (0) |
+| pipe s1 | shortlist k 256 | **0.4054** | 0.7593 | 0.5282 | 5912 (0) |
+| pipe s2 | shortlist k 256 | **0.3840** | 0.7421 | 0.5050 | 5912 (0) |
+| pipe s3 | shortlist k 256 | **0.3901** | 0.7415 | 0.5202 | 5912 (0) |
+| seed 0 | EC rule, argmax base n 16 | **0.3799** | 0.7854 | 0.4843 | 5912 (0) |
+| pipe s1 | EC rule, argmax base n 16 | **0.3668** | 0.7638 | 0.4746 | 5912 (0) |
+| pipe s2 | EC rule, argmax base n 16 | **0.3674** | 0.7657 | 0.4686 | 5912 (0) |
+| pipe s3 | EC rule, argmax base n 16 | **0.3604** | 0.7882 | 0.4551 | 5912 (0) |
+| seed 0 | EC rule, argmax base n 64 | **0.3826** | 0.7905 | 0.4862 | 5912 (0) |
+| pipe s1 | EC rule, argmax base n 64 | **0.3729** | 0.7686 | 0.4791 | 5912 (0) |
+| pipe s2 | EC rule, argmax base n 64 | **0.3711** | 0.7663 | 0.4742 | 5912 (0) |
+| pipe s3 | EC rule, argmax base n 64 | **0.3724** | 0.7971 | 0.4661 | 5912 (0) |
+| seed 0 | EC rule, shortlist base n 16 | **0.4138** | 0.7701 | 0.5281 | 5912 (0) |
+| pipe s1 | EC rule, shortlist base n 16 | **0.4215** | 0.7767 | 0.5396 | 5912 (0) |
+| pipe s2 | EC rule, shortlist base n 16 | **0.4096** | 0.7625 | 0.5277 | 5912 (0) |
+| pipe s3 | EC rule, shortlist base n 16 | **0.4017** | 0.7656 | 0.5188 | 5912 (0) |
+| seed 0 | EC rule, shortlist base n 64 | **0.4174** | 0.7733 | 0.5307 | 5912 (0) |
+| pipe s1 | EC rule, shortlist base n 64 | **0.4303** | 0.7825 | 0.5464 | 5912 (0) |
+| pipe s2 | EC rule, shortlist base n 64 | **0.4195** | 0.7693 | 0.5340 | 5912 (0) |
+| pipe s3 | EC rule, shortlist base n 64 | **0.4071** | 0.7718 | 0.5227 | 5912 (0) |
+| seed 0 | EC rule, mixture base n 16 | **0.4038** | 0.7803 | 0.5213 | 5912 (0) |
+| pipe s1 | EC rule, mixture base n 16 | **0.3859** | 0.7773 | 0.4936 | 5912 (0) |
+| pipe s2 | EC rule, mixture base n 16 | **0.3961** | 0.7696 | 0.5046 | 5912 (0) |
+| pipe s3 | EC rule, mixture base n 16 | **0.3783** | 0.7873 | 0.4827 | 5912 (0) |
+| seed 0 | EC rule, mixture base n 64 | **0.4066** | 0.7869 | 0.5204 | 5912 (0) |
+| pipe s1 | EC rule, mixture base n 64 | **0.3925** | 0.7800 | 0.4985 | 5912 (0) |
+| pipe s2 | EC rule, mixture base n 64 | **0.4014** | 0.7716 | 0.5105 | 5912 (0) |
+| pipe s3 | EC rule, mixture base n 64 | **0.3856** | 0.7952 | 0.4872 | 5912 (0) |
+
+Stage one (original scenes) sub-scores:
+
+| Run | Rule | NC | DAC | DDC | TLC | EP | TTC | LK | HC | EC |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seed 0 | argmax | 0.9511 | 0.9133 | 0.9900 | 1.0000 | 0.8132 | 0.9444 | 0.9378 | 0.9778 | 0.6089 |
+| pipe s1 | argmax | 0.9489 | 0.9200 | 0.9867 | 0.9978 | 0.8032 | 0.9467 | 0.9267 | 0.9756 | 0.5689 |
+| pipe s2 | argmax | 0.9556 | 0.8978 | 0.9889 | 1.0000 | 0.8128 | 0.9556 | 0.9356 | 0.9711 | 0.6178 |
+| pipe s3 | argmax | 0.9556 | 0.9178 | 0.9889 | 1.0000 | 0.8181 | 0.9467 | 0.9356 | 0.9733 | 0.6311 |
+| seed 0 | shortlist k 256 | 0.9600 | 0.9333 | 0.9911 | 1.0000 | 0.7547 | 0.9578 | 0.9378 | 0.9578 | 0.5333 |
+| pipe s1 | shortlist k 256 | 0.9511 | 0.9489 | 0.9956 | 1.0000 | 0.7596 | 0.9511 | 0.9356 | 0.9711 | 0.5289 |
+| pipe s2 | shortlist k 256 | 0.9533 | 0.9311 | 0.9922 | 1.0000 | 0.7616 | 0.9533 | 0.9489 | 0.9667 | 0.4844 |
+| pipe s3 | shortlist k 256 | 0.9567 | 0.9356 | 0.9922 | 1.0000 | 0.7482 | 0.9533 | 0.9378 | 0.9578 | 0.4489 |
+| seed 0 | EC rule, argmax base n 16 | 0.9533 | 0.9156 | 0.9933 | 1.0000 | 0.8126 | 0.9489 | 0.9400 | 0.9778 | 0.8222 |
+| pipe s1 | EC rule, argmax base n 16 | 0.9489 | 0.9089 | 0.9867 | 0.9978 | 0.8055 | 0.9400 | 0.9267 | 0.9756 | 0.7911 |
+| pipe s2 | EC rule, argmax base n 16 | 0.9600 | 0.8889 | 0.9867 | 1.0000 | 0.8146 | 0.9578 | 0.9333 | 0.9711 | 0.8178 |
+| pipe s3 | EC rule, argmax base n 16 | 0.9578 | 0.9178 | 0.9889 | 1.0000 | 0.8179 | 0.9489 | 0.9356 | 0.9733 | 0.8133 |
+| seed 0 | EC rule, argmax base n 64 | 0.9533 | 0.9133 | 0.9933 | 1.0000 | 0.8140 | 0.9489 | 0.9444 | 0.9778 | 0.8711 |
+| pipe s1 | EC rule, argmax base n 64 | 0.9489 | 0.9067 | 0.9878 | 0.9978 | 0.8066 | 0.9400 | 0.9267 | 0.9756 | 0.8533 |
+| pipe s2 | EC rule, argmax base n 64 | 0.9578 | 0.8867 | 0.9867 | 1.0000 | 0.8146 | 0.9556 | 0.9333 | 0.9711 | 0.8622 |
+| pipe s3 | EC rule, argmax base n 64 | 0.9578 | 0.9222 | 0.9911 | 1.0000 | 0.8148 | 0.9511 | 0.9333 | 0.9756 | 0.8711 |
+| seed 0 | EC rule, shortlist base n 16 | 0.9600 | 0.9333 | 0.9900 | 1.0000 | 0.7531 | 0.9578 | 0.9356 | 0.9578 | 0.7467 |
+| pipe s1 | EC rule, shortlist base n 16 | 0.9533 | 0.9444 | 0.9944 | 1.0000 | 0.7586 | 0.9533 | 0.9311 | 0.9711 | 0.7244 |
+| pipe s2 | EC rule, shortlist base n 16 | 0.9533 | 0.9333 | 0.9922 | 1.0000 | 0.7586 | 0.9533 | 0.9444 | 0.9667 | 0.6800 |
+| pipe s3 | EC rule, shortlist base n 16 | 0.9611 | 0.9356 | 0.9911 | 1.0000 | 0.7483 | 0.9578 | 0.9311 | 0.9578 | 0.6578 |
+| seed 0 | EC rule, shortlist base n 64 | 0.9600 | 0.9333 | 0.9900 | 1.0000 | 0.7536 | 0.9578 | 0.9333 | 0.9578 | 0.7733 |
+| pipe s1 | EC rule, shortlist base n 64 | 0.9533 | 0.9444 | 0.9944 | 1.0000 | 0.7583 | 0.9533 | 0.9333 | 0.9711 | 0.7689 |
+| pipe s2 | EC rule, shortlist base n 64 | 0.9533 | 0.9356 | 0.9922 | 1.0000 | 0.7584 | 0.9533 | 0.9444 | 0.9667 | 0.7244 |
+| pipe s3 | EC rule, shortlist base n 64 | 0.9611 | 0.9356 | 0.9911 | 1.0000 | 0.7468 | 0.9578 | 0.9311 | 0.9600 | 0.7156 |
+| seed 0 | EC rule, mixture base n 16 | 0.9589 | 0.9111 | 0.9944 | 1.0000 | 0.8050 | 0.9556 | 0.9400 | 0.9778 | 0.8267 |
+| pipe s1 | EC rule, mixture base n 16 | 0.9489 | 0.9244 | 0.9922 | 1.0000 | 0.7964 | 0.9444 | 0.9289 | 0.9756 | 0.7956 |
+| pipe s2 | EC rule, mixture base n 16 | 0.9600 | 0.8978 | 0.9944 | 1.0000 | 0.7995 | 0.9578 | 0.9378 | 0.9733 | 0.8311 |
+| pipe s3 | EC rule, mixture base n 16 | 0.9600 | 0.9156 | 0.9944 | 1.0000 | 0.8032 | 0.9556 | 0.9311 | 0.9733 | 0.8222 |
+| seed 0 | EC rule, mixture base n 64 | 0.9589 | 0.9111 | 0.9944 | 1.0000 | 0.8069 | 0.9556 | 0.9422 | 0.9778 | 0.8756 |
+| pipe s1 | EC rule, mixture base n 64 | 0.9467 | 0.9200 | 0.9933 | 1.0000 | 0.7977 | 0.9422 | 0.9289 | 0.9756 | 0.8533 |
+| pipe s2 | EC rule, mixture base n 64 | 0.9578 | 0.8956 | 0.9944 | 1.0000 | 0.8013 | 0.9556 | 0.9378 | 0.9733 | 0.8756 |
+| pipe s3 | EC rule, mixture base n 64 | 0.9622 | 0.9178 | 0.9956 | 1.0000 | 0.8014 | 0.9556 | 0.9333 | 0.9756 | 0.8800 |
+
+Stage two (synthetic scenes) sub-scores:
+
+| Run | Rule | NC | DAC | DDC | TLC | EP | TTC | LK | HC | EC |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seed 0 | argmax | 0.8227 | 0.8058 | 0.8787 | 0.9894 | 0.8248 | 0.8016 | 0.4818 | 0.9599 | 0.5589 |
+| pipe s1 | argmax | 0.8269 | 0.7935 | 0.8744 | 0.9844 | 0.8291 | 0.7957 | 0.4779 | 0.9574 | 0.5748 |
+| pipe s2 | argmax | 0.8229 | 0.7590 | 0.8792 | 0.9909 | 0.8196 | 0.7902 | 0.4795 | 0.9534 | 0.5732 |
+| pipe s3 | argmax | 0.8206 | 0.7898 | 0.8706 | 0.9870 | 0.8369 | 0.7935 | 0.4830 | 0.9550 | 0.5894 |
+| seed 0 | shortlist k 256 | 0.8543 | 0.8592 | 0.9135 | 0.9857 | 0.7422 | 0.8423 | 0.5472 | 0.9524 | 0.5710 |
+| pipe s1 | shortlist k 256 | 0.8712 | 0.8621 | 0.9283 | 0.9828 | 0.7547 | 0.8539 | 0.5258 | 0.9582 | 0.5209 |
+| pipe s2 | shortlist k 256 | 0.8593 | 0.8473 | 0.9171 | 0.9888 | 0.7371 | 0.8459 | 0.5375 | 0.9511 | 0.5244 |
+| pipe s3 | shortlist k 256 | 0.8606 | 0.8576 | 0.9158 | 0.9872 | 0.7284 | 0.8439 | 0.5405 | 0.9572 | 0.5773 |
+| seed 0 | EC rule, argmax base n 16 | 0.8162 | 0.7996 | 0.8736 | 0.9881 | 0.8314 | 0.7891 | 0.4726 | 0.9570 | 0.7934 |
+| pipe s1 | EC rule, argmax base n 16 | 0.8291 | 0.7918 | 0.8792 | 0.9843 | 0.8289 | 0.7996 | 0.4740 | 0.9576 | 0.7902 |
+| pipe s2 | EC rule, argmax base n 16 | 0.8242 | 0.7675 | 0.8716 | 0.9884 | 0.8223 | 0.7911 | 0.4787 | 0.9562 | 0.7908 |
+| pipe s3 | EC rule, argmax base n 16 | 0.8210 | 0.7752 | 0.8719 | 0.9850 | 0.8357 | 0.7959 | 0.4774 | 0.9598 | 0.8033 |
+| seed 0 | EC rule, argmax base n 64 | 0.8121 | 0.7996 | 0.8665 | 0.9880 | 0.8325 | 0.7859 | 0.4743 | 0.9557 | 0.8607 |
+| pipe s1 | EC rule, argmax base n 64 | 0.8286 | 0.7897 | 0.8778 | 0.9843 | 0.8312 | 0.7994 | 0.4682 | 0.9594 | 0.8625 |
+| pipe s2 | EC rule, argmax base n 64 | 0.8241 | 0.7712 | 0.8712 | 0.9883 | 0.8203 | 0.7909 | 0.4785 | 0.9541 | 0.8519 |
+| pipe s3 | EC rule, argmax base n 64 | 0.8197 | 0.7797 | 0.8717 | 0.9849 | 0.8341 | 0.7960 | 0.4742 | 0.9638 | 0.8833 |
+| seed 0 | EC rule, shortlist base n 16 | 0.8481 | 0.8607 | 0.9126 | 0.9825 | 0.7366 | 0.8379 | 0.5404 | 0.9496 | 0.7592 |
+| pipe s1 | EC rule, shortlist base n 16 | 0.8681 | 0.8526 | 0.9289 | 0.9831 | 0.7499 | 0.8523 | 0.5266 | 0.9592 | 0.7120 |
+| pipe s2 | EC rule, shortlist base n 16 | 0.8605 | 0.8517 | 0.9173 | 0.9866 | 0.7317 | 0.8481 | 0.5445 | 0.9573 | 0.7393 |
+| pipe s3 | EC rule, shortlist base n 16 | 0.8586 | 0.8474 | 0.9108 | 0.9879 | 0.7269 | 0.8461 | 0.5349 | 0.9556 | 0.7504 |
+| seed 0 | EC rule, shortlist base n 64 | 0.8506 | 0.8597 | 0.9107 | 0.9824 | 0.7344 | 0.8388 | 0.5378 | 0.9473 | 0.8168 |
+| pipe s1 | EC rule, shortlist base n 64 | 0.8688 | 0.8558 | 0.9261 | 0.9831 | 0.7511 | 0.8529 | 0.5255 | 0.9571 | 0.7616 |
+| pipe s2 | EC rule, shortlist base n 64 | 0.8631 | 0.8516 | 0.9172 | 0.9866 | 0.7325 | 0.8506 | 0.5461 | 0.9553 | 0.7770 |
+| pipe s3 | EC rule, shortlist base n 64 | 0.8603 | 0.8453 | 0.9122 | 0.9862 | 0.7248 | 0.8474 | 0.5381 | 0.9560 | 0.7982 |
+| seed 0 | EC rule, mixture base n 16 | 0.8250 | 0.8394 | 0.8998 | 0.9881 | 0.7957 | 0.8151 | 0.4924 | 0.9497 | 0.7996 |
+| pipe s1 | EC rule, mixture base n 16 | 0.8315 | 0.8111 | 0.8993 | 0.9865 | 0.8136 | 0.8117 | 0.4744 | 0.9632 | 0.7854 |
+| pipe s2 | EC rule, mixture base n 16 | 0.8348 | 0.8156 | 0.8952 | 0.9885 | 0.7957 | 0.8124 | 0.4948 | 0.9515 | 0.8002 |
+| pipe s3 | EC rule, mixture base n 16 | 0.8335 | 0.8031 | 0.8910 | 0.9877 | 0.8014 | 0.8166 | 0.4905 | 0.9665 | 0.8211 |
+| seed 0 | EC rule, mixture base n 64 | 0.8222 | 0.8347 | 0.8993 | 0.9881 | 0.7974 | 0.8122 | 0.4939 | 0.9517 | 0.8506 |
+| pipe s1 | EC rule, mixture base n 64 | 0.8349 | 0.8091 | 0.8966 | 0.9856 | 0.8154 | 0.8130 | 0.4719 | 0.9632 | 0.8533 |
+| pipe s2 | EC rule, mixture base n 64 | 0.8383 | 0.8168 | 0.8925 | 0.9883 | 0.7963 | 0.8148 | 0.4992 | 0.9497 | 0.8559 |
+| pipe s3 | EC rule, mixture base n 64 | 0.8360 | 0.8053 | 0.8889 | 0.9856 | 0.7983 | 0.8171 | 0.4919 | 0.9661 | 0.8912 |
+
+### rl3_ecshort4 with its own scorer (2026-11-21)
+
+The EC-reward model rl3_ecshort4_b0.005 (EC in the reward with the shortlist previous plan, weight 4; seeds 0 and 1)
+held the navhard best, 0.456 (shortlist + EC rule n 64). That number, and every other scorer-based number of the
+EC-reward models, used the control scorer (p3_aux_ctrl ep 2; findings 40 and 45, "The navhard 0.456 in context").
+
+Re-scored with the own scorer of its start model (p3_aux_policy_ep03), as used for all other RL-3 numbers:
+- navtest shortlist k 256, shortlist_v1 k 256 (+ v1 comfort), mixture λ 10;
+- navhard shortlist k 256;
+- EC rule (3 bases, n 16 / 64).
+
+mixture_v1 λ 10 already existed with the own scorer. Jobs 15282227-64, all completed. In brackets: control scorer
+(v1 values with v1 comfort exist only for the own scorer). Last column: rl3_b0.005 (no EC in the reward), own
+scorer, 6 seeds.
+
+| Metric | seed 0: own (control) | seed 1: own (control) | own − control, mean of 2 | rl3_b0.005 own, 6 seeds mean ± SD |
+|---|---|---|---|---|
+| navtest v2 shortlist k 256 | 0.8839 (0.8850) | 0.8824 (0.8837) | -0.0012 | 0.8816 ± 0.0011 |
+| navtest v2 mixture λ 10 | 0.8927 (0.8944) | 0.8930 (0.8938) | -0.0012 | 0.8938 ± 0.0014 |
+| navtest v1 shortlist_v1 k 256 | 0.9031 (–) | 0.9034 (–) | – | 0.9097 ± 0.0008 |
+| navtest v1 mixture_v1 λ 10 | 0.9077 (–) | 0.9075 (–) | – | 0.9169 ± 0.0010 |
+| navhard shortlist k 256 | 0.428 (0.425) | 0.426 (0.421) | +0.004 | 0.410 ± 0.008 |
+| navhard shortlist k 256 stage one | 0.763 (0.770) | 0.757 (0.769) | -0.009 | 0.763 ± 0.005 |
+| navhard shortlist k 256 stage two | 0.550 (0.546) | 0.550 (0.539) | +0.008 | 0.529 ± 0.011 |
+| navtest v2 EC rule, argmax base n 16 | 0.8953 (0.8953) | 0.8949 (0.8949) | +0.0000 | 0.9006 ± 0.0017 |
+| navtest v2 EC rule, argmax base n 64 | 0.8952 (0.8952) | 0.8940 (0.8940) | +0.0000 | 0.9021 ± 0.0013 |
+| navtest v2 EC rule, short256 base n 16 | 0.8894 (0.8902) | 0.8884 (0.8896) | -0.0010 | 0.8912 ± 0.0012 |
+| navtest v2 EC rule, short256 base n 64 | 0.8903 (0.8912) | 0.8897 (0.8902) | -0.0007 | 0.8929 ± 0.0010 |
+| navtest v2 EC rule, mix10 base n 16 | 0.8979 (0.8988) | 0.8973 (0.8982) | -0.0009 | 0.9033 ± 0.0013 |
+| navtest v2 EC rule, mix10 base n 64 | 0.8984 (0.8996) | 0.8979 (0.8980) | -0.0007 | 0.9056 ± 0.0014 |
+| navhard EC rule, argmax base n 16 | 0.410 (0.410) | 0.396 (0.396) | +0.000 | 0.396 ± 0.011 |
+| navhard EC rule, argmax base n 16 (stage one / two) | 0.774 / 0.525 (0.774 / 0.525) | 0.755 / 0.508 (0.755 / 0.508) | | |
+| navhard EC rule, argmax base n 64 | 0.413 (0.413) | 0.400 (0.400) | +0.000 | 0.402 ± 0.011 |
+| navhard EC rule, argmax base n 64 (stage one / two) | 0.777 / 0.528 (0.777 / 0.528) | 0.760 / 0.510 (0.760 / 0.510) | | |
+| navhard EC rule, short256 base n 16 | 0.447 (0.448) | 0.446 (0.442) | +0.002 | 0.433 ± 0.011 |
+| navhard EC rule, short256 base n 16 (stage one / two) | 0.770 / 0.568 (0.785 / 0.566) | 0.768 / 0.566 (0.782 / 0.555) | | |
+| navhard EC rule, short256 base n 64 | 0.453 (0.456) | 0.450 (0.444) | +0.002 | 0.438 ± 0.011 |
+| navhard EC rule, short256 base n 64 (stage one / two) | 0.775 / 0.570 (0.792 / 0.570) | 0.769 / 0.570 (0.786 / 0.556) | | |
+| navhard EC rule, mix10 base n 16 | 0.422 (0.414) | 0.422 (0.436) | -0.003 | 0.418 ± 0.014 |
+| navhard EC rule, mix10 base n 16 (stage one / two) | 0.776 / 0.533 (0.779 / 0.528) | 0.773 / 0.535 (0.778 / 0.547) | | |
+| navhard EC rule, mix10 base n 64 | 0.429 (0.418) | 0.425 (0.437) | -0.000 | 0.425 ± 0.012 |
+| navhard EC rule, mix10 base n 64 (stage one / two) | 0.781 / 0.538 (0.784 / 0.530) | 0.778 / 0.536 (0.780 / 0.547) | | |
+
+74. **With the own scorer, ecshort4 keeps its navhard level and its navtest cost.**
+    - navhard shortlist + EC rule n 64: 0.453 / 0.450 (seeds 0 / 1; control 0.456 / 0.444). The 2-seed mean of
+      0.4515 is about the same as with the control scorer (0.450).
+    - The own scorer gives lower stage one (−0.003 to −0.017, most on the shortlist base) and equal or higher
+      stage two.
+    - Against rl3_b0.005 with the same scorer (6 seeds 0.438 ± 0.011, 9 runs 0.437 ± 0.010), the gain is +0.014;
+      for shortlist k 256 it is +0.017 (0.427 vs 0.410 ± 0.008, through stage two 0.550 vs 0.529).
+    - Both ecshort4 seeds lie above the rl3_b0.005 mean on all three shortlist-based navhard rules. With 2 seeds
+      (Welch SE ≈ 0.003-0.005, few degrees of freedom) this is suggestive, not established.
+    - Finding 45's reading of 0.456 as a best-of-several pick is weakened: both seeds reach ≥ 0.450 with the own
+      scorer.
+    - The navtest cost stays: v2 mixture + EC n 64 0.898 vs 0.9056 ± 0.0014 (−0.0075), v1 mixture_v1 0.9076 vs
+      0.9169 ± 0.0010 (−0.009). EC in the reward trades navtest for navhard (findings 36-37).
+    - The own vs control scorer on ecshort4: navtest −0.0007 to −0.0012, navhard −0.003 to +0.004. The argmax-base
+      EC rule is identical with either scorer, because it does not use the scorer.
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 

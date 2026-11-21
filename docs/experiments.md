@@ -1231,6 +1231,78 @@ run as `SRC=p3_heads_policy EXP=rl3_heads_b0.005_pipe SPECS="1:3:- 2:2:- 3:3:-"`
 | rl3_heads_b0.005_pipe_s2 | 15282154-56 | 15282157 | 15282158 | 15282159-82 |
 | rl3_heads_b0.005_pipe_s3 | 15282183-85 | 15282186 | 15282187 | 15282188-211 |
 
+**Status 2026-11-21: all 87 jobs completed** (no timeouts).
+- Durations:
+  - caches 31-32 min;
+  - trainings 2 h 31-32 min;
+  - predictions 19 min;
+  - navtest scoring 15-25 min, navhard 29-40 min;
+  - EC selection 7-21 min;
+  - v1 comfort 8-12 min.
+- Run folders with checkpoints, used by the predictions:
+  - `rl3_heads_b0.005_pipe_s1/2026.11.21.00.25.17`;
+  - `rl3_heads_b0.005_pipe_s2/2026.11.21.00.21.42`;
+  - `rl3_heads_b0.005_pipe_s3/2026.11.21.00.24.13`.
+
+  The empty twin folders are the multi-rank artifact.
+- Every navtest result has 12,146 valid scenes; no navhard scene is invalid.
+- Results: final_evaluation.md section "aux vs heads after RL-3" (findings 71-73). aux > heads in 4/4 pairs on every
+  navtest rule (+0.009 to +0.012) and on navhard argmax / argmax- and mixture-base EC rules; 3/4 on the navhard
+  shortlist rules.
+
+**Val history** (as for the aux pipeline runs; seed 0 = `rl3_heads_b0.005/2026.11.09.00.15.00`):
+
+| Run | step (epoch) | argmax | shortlist 256 | shortlist 64 | expected reward | KL | entropy | argmax zero | changed | val loss | expected ADE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed 0 | 332 (0) | 0.8082 | 0.8293 | 0.8282 | 0.7919 | 3.5434 | 3.5982 | 0.0972 | 0.9525 | -0.7742 | 1.5184 |
+| seed 0 | 664 (0) | 0.8293 | 0.8382 | 0.8322 | 0.8175 | 2.5288 | 3.3432 | 0.0891 | 0.9346 | -0.8049 | 1.2622 |
+| seed 0 | 997 (1) | 0.8372 | 0.8381 | 0.8316 | 0.8249 | 2.4150 | 3.2012 | 0.0876 | 0.9349 | -0.8128 | 1.1887 |
+| seed 0 | 1329 (1) | 0.8403 | 0.8387 | 0.8327 | 0.8304 | 2.5310 | 3.1349 | 0.0832 | 0.9358 | -0.8178 | 1.2087 |
+| pipe s1 | 332 (0) | 0.8169 | 0.8345 | 0.8346 | 0.8039 | 2.8619 | 3.6157 | 0.0953 | 0.9544 | -0.7896 | 1.3908 |
+| pipe s1 | 664 (0) | 0.8351 | 0.8408 | 0.8354 | 0.8239 | 3.4624 | 3.3836 | 0.0704 | 0.9488 | -0.8066 | 1.4699 |
+| pipe s1 | 997 (1) | 0.8409 | 0.8413 | 0.8373 | 0.8275 | 2.9295 | 3.1948 | 0.0812 | 0.9414 | -0.8129 | 1.3128 |
+| pipe s1 | 1329 (1) | 0.8474 | 0.8444 | 0.8388 | 0.8366 | 2.9573 | 3.1451 | 0.0733 | 0.9399 | -0.8218 | 1.3189 |
+| pipe s2 | 332 (0) | 0.8103 | 0.8302 | 0.8300 | 0.7963 | 3.3151 | 3.5741 | 0.1006 | 0.9543 | -0.7798 | 1.4660 |
+| pipe s2 | 664 (0) | 0.8358 | 0.8398 | 0.8360 | 0.8258 | 3.0342 | 3.2504 | 0.0755 | 0.9451 | -0.8107 | 1.3595 |
+| pipe s2 | 997 (1) | 0.8412 | 0.8415 | 0.8357 | 0.8296 | 2.8477 | 3.2035 | 0.0789 | 0.9427 | -0.8153 | 1.3131 |
+| pipe s2 | 1329 (1) | 0.8448 | 0.8411 | 0.8357 | 0.8342 | 2.6293 | 3.1302 | 0.0773 | 0.9348 | -0.8211 | 1.2420 |
+| pipe s3 | 332 (0) | 0.8070 | 0.8273 | 0.8278 | 0.7900 | 2.6202 | 3.5375 | 0.1094 | 0.9467 | -0.7769 | 1.3073 |
+| pipe s3 | 664 (0) | 0.8305 | 0.8387 | 0.8340 | 0.8207 | 3.0046 | 3.2280 | 0.0808 | 0.9432 | -0.8057 | 1.3116 |
+| pipe s3 | 997 (1) | 0.8328 | 0.8383 | 0.8332 | 0.8215 | 2.7078 | 3.1267 | 0.0900 | 0.9390 | -0.8079 | 1.2355 |
+| pipe s3 | 1329 (1) | 0.8425 | 0.8408 | 0.8345 | 0.8316 | 2.6894 | 3.0792 | 0.0793 | 0.9336 | -0.8181 | 1.2236 |
+
+- Val argmax ends at 0.8403-0.8474 (aux pipeline 0.8548-0.8576); the last check is the best in all four runs.
+- KL ends at 2.53-2.96 and entropy at 3.08-3.15.
+
+**Job accounting** (sacct; CPU efficiency = TotalCPU / (elapsed × CPUs)):
+
+| Run | Job type | jobs | state | elapsed (min) | CPUs | CPU efficiency | peak RSS / request | start → end (2026-11-20/21) |
+|---|---|---|---|---|---|---|---|---|
+| heads s1 | fused-state cache (3 shards) | 15282125-27 (3) | 3 COMPLETED | 31.4-32.4 | 8 | 14-15% | 25.7G/31.2G of 32000M | 11-20T23:47 → 11-21T00:20 |
+| heads s1 | RL-3 training | 15282128 | 1 COMPLETED | 150.8 | 12 | 36% | 17.1G of 46000M | 11-21T00:21 → 11-21T02:52 |
+| heads s1 | GPU predictions | 15282129 | 1 COMPLETED | 18.8 | 11 | 32% | 40.0G of 40G | 11-21T02:52 → 11-21T03:10 |
+| heads s1 | navtest scoring | 15282130-52 (11) | 11 COMPLETED | 16.6-21.4 | 4 | 75-93% | 7.2G/7.8G of 8000M | 11-21T03:11 → 11-21T03:53 |
+| heads s1 | v1 comfort | 15282137-39 (3) | 3 COMPLETED | 7.9-11.5 | 4 | 79-90% | 7.8G of 8000M | 11-21T03:29 → 11-21T03:45 |
+| heads s1 | EC selection | 15282140-41 (2) | 2 COMPLETED | 7.3-20.5 | 8 | 74-81% | 16.0G of 16G | 11-21T03:11 → 11-21T03:32 |
+| heads s1 | navhard scoring | 15282135-53 (8) | 8 COMPLETED | 30.9-36.2 | 4 | 75-81% | 6.0G of 6G | 11-21T03:11 → 11-21T03:55 |
+| heads s2 | fused-state cache (3 shards) | 15282154-56 (3) | 3 COMPLETED | 31.4 | 8 | 14-15% | 23.4G/25.6G/31.2G of 32000M | 11-20T23:47 → 11-21T00:19 |
+| heads s2 | RL-3 training | 15282157 | 1 COMPLETED | 150.9 | 12 | 38% | 17.0G of 46000M | 11-21T00:19 → 11-21T02:50 |
+| heads s2 | GPU predictions | 15282158 | 1 COMPLETED | 18.7 | 11 | 30% | 40.0G of 40G | 11-21T02:50 → 11-21T03:08 |
+| heads s2 | navtest scoring | 15282159-81 (11) | 11 COMPLETED | 14.8-25.1 | 4 | 69-93% | 7.8G of 8000M | 11-21T03:09 → 11-21T03:47 |
+| heads s2 | v1 comfort | 15282166-68 (3) | 3 COMPLETED | 8.8-11.3 | 4 | 78-87% | 7.8G of 8000M | 11-21T03:29 → 11-21T03:43 |
+| heads s2 | EC selection | 15282169-70 (2) | 2 COMPLETED | 8.0-20.1 | 9 | 64-75% | 16.0G of 16G | 11-21T03:09 → 11-21T03:29 |
+| heads s2 | navhard scoring | 15282164-82 (8) | 8 COMPLETED | 29.8-40.2 | 4 | 75-83% | 6.0G of 6G | 11-21T03:09 → 11-21T03:55 |
+| heads s3 | fused-state cache (3 shards) | 15282183-85 (3) | 3 COMPLETED | 31.3-31.6 | 8 | 15-16% | 31.2G of 32000M | 11-20T23:47 → 11-21T00:19 |
+| heads s3 | RL-3 training | 15282186 | 1 COMPLETED | 152.3 | 12 | 36% | 15.3G of 46000M | 11-21T00:19 → 11-21T02:52 |
+| heads s3 | GPU predictions | 15282187 | 1 COMPLETED | 18.8 | 11 | 28% | 40.0G of 40G | 11-21T02:52 → 11-21T03:10 |
+| heads s3 | navtest scoring | 15282188-10 (11) | 11 COMPLETED | 15.5-18.9 | 4 | 77-91% | 7.8G of 8000M | 11-21T03:11 → 11-21T03:49 |
+| heads s3 | v1 comfort | 15282195-97 (3) | 3 COMPLETED | 10.3-10.7 | 4 | 75-80% | 7.8G of 8000M | 11-21T03:29 → 11-21T03:41 |
+| heads s3 | EC selection | 15282198-99 (2) | 2 COMPLETED | 7.3-20.5 | 8 | 75-83% | 16.0G of 16G | 11-21T03:11 → 11-21T03:32 |
+| heads s3 | navhard scoring | 15282193-11 (8) | 8 COMPLETED | 29.4-32.8 | 4 | 78-83% | 6.0G of 6G | 11-21T03:11 → 11-21T03:52 |
+| heads seed 0 (own-scorer additions) | navtest scoring | 15282212-25 (7) | 7 COMPLETED | 17.2-21.0 | 4 | 77-85% | 6.6G/7.3G/7.8G of 8000M | 11-20T23:48 → 11-21T00:29 |
+| heads seed 0 (own-scorer additions) | EC selection | 15282213-14 (2) | 2 COMPLETED | 8.1-20.5 | 8 | 68-80% | 16.0G of 16G | 11-20T23:48 → 11-21T00:09 |
+| heads seed 0 (own-scorer additions) | navhard scoring | 15282216-26 (6) | 6 COMPLETED | 28.9-31.8 | 4 | 80-82% | 6.0G of 6G | 11-20T23:57 → 11-21T00:28 |
+
 ### Own-scorer evaluations that were missing (submitted 2026-11-20 23:47)
 
 - `rl3_heads_b0.005_ep01` (heads seed 0) already had its own scorer (p3_heads_policy_ep02) for argmax, shortlist /
@@ -1249,6 +1321,21 @@ run as `SRC=p3_heads_policy EXP=rl3_heads_b0.005_pipe SPECS="1:3:- 2:2:- 3:3:-"`
 Script `exp/rl3_logs/submit_own_scorer_evals.sh`, log `exp/rl3_logs/own_scorer_evals_2026-11-20.txt`. Output
 folders: `<pred>_<rule>` and `<pred>_own_ec[seq]_*`, separate from the control-scorer folders `<pred>__ctrlscorer_*`
 and `<pred>_ec[seq]_*`.
+
+**Status 2026-11-21: all 53 jobs completed** (ecshort4 navtest scoring 17-35 min, navhard 29-33 min).
+Results: final_evaluation.md "aux vs heads after RL-3" (heads seed 0) and "rl3_ecshort4 with its own scorer"
+(finding 74). With the own scorer, ecshort4's navhard shortlist + EC n 64 is 0.453 / 0.450 (control 0.456 / 0.444).
+
+| Run | Job type | jobs | state | elapsed (min) | CPUs | CPU efficiency | peak RSS / request | start → end (2026-11-20/21) |
+|---|---|---|---|---|---|---|---|---|
+| ecshort4 seed 0 (own scorer) | navtest scoring | 15282227-44 (9) | 9 COMPLETED | 16.9-35.1 | 4 | 68-86% | 6.3G/7.8G of 8000M | 11-20T23:48 → 11-21T00:29 |
+| ecshort4 seed 0 (own scorer) | v1 comfort | 15282231 | 1 COMPLETED | 12.1 | 4 | 71% | 7.8G of 8000M | 11-21T00:05 → 11-21T00:17 |
+| ecshort4 seed 0 (own scorer) | EC selection | 15282232-33 (2) | 2 COMPLETED | 7.5-19.7 | 8 | 71-86% | 16.0G of 16G | 11-20T23:48 → 11-21T00:08 |
+| ecshort4 seed 0 (own scorer) | navhard scoring | 15282230-45 (7) | 7 COMPLETED | 28.7-29.9 | 4 | 75-84% | 6.0G of 6G | 11-20T23:48 → 11-21T00:26 |
+| ecshort4 seed 1 (own scorer) | navtest scoring | 15282246-63 (9) | 9 COMPLETED | 17.6-19.5 | 4 | 80-86% | 6.3G/6.4G/7.8G of 8000M | 11-20T23:48 → 11-21T00:29 |
+| ecshort4 seed 1 (own scorer) | v1 comfort | 15282250 | 1 COMPLETED | 11.2 | 4 | 74% | 7.8G of 8000M | 11-21T00:08 → 11-21T00:19 |
+| ecshort4 seed 1 (own scorer) | EC selection | 15282251-52 (2) | 2 COMPLETED | 7.5-19.6 | 8 | 71-83% | 16.0G of 16G | 11-20T23:48 → 11-21T00:08 |
+| ecshort4 seed 1 (own scorer) | navhard scoring | 15282249-64 (7) | 7 COMPLETED | 29.9-33.1 | 4 | 79-83% | 6.0G of 6G | 11-20T23:48 → 11-21T00:30 |
 
 ### Imitation-only phase 3 from p1d_total: p3_imitation (submitted 2026-11-20 23:47)
 
@@ -1273,6 +1360,37 @@ then the offline val evaluation of every epoch, 15282266 (`eval_latest_run.sh`, 
 **Caveat.** p1d_total's phase 1 already had the sub-score losses (weight 1), and they also trained the planner queries
 that the policy head shares. Phase 3 is therefore matched in everything but the loss, while phase 1 is shared. Script
 `exp/seed_aux_heads/submit_p3_imitation.sh`, log `p3_imitation_2026-11-20.txt`.
+
+**Status 2026-11-21.**
+- Training 15282265 completed: 10 h 56 min on x1001c5s1b0n0, all 10 epochs (no early stop). Run folder
+  `p3_imitation/2026.11.20.23.49.38`.
+- Offline val evaluation 15282266 completed: 2 h 38 min, peak GPU memory 22.5 GB.
+- Val per epoch (18,179 scenes; `checkpoint_eval/summary_p3_imitation.csv`):
+
+| Epoch | val argmax | ADE | FDE | expected score | entropy | NC | DAC | EP | TTC | LK |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 0.6884 | 0.812 | 1.942 | 0.619 | 4.68 | 0.966 | 0.810 | 0.849 | 0.955 | 0.918 |
+| 1 | 0.7103 | 0.810 | 1.944 | 0.646 | 4.54 | 0.969 | 0.832 | 0.846 | 0.959 | 0.921 |
+| 2 | 0.7076 | 0.800 | 1.900 | 0.647 | 4.46 | 0.967 | 0.829 | 0.853 | 0.958 | 0.924 |
+| 3 | 0.7062 | 0.800 | 1.915 | 0.645 | 4.40 | 0.969 | 0.828 | 0.849 | 0.958 | 0.918 |
+| 4 | 0.7155 | 0.789 | 1.872 | 0.656 | 4.24 | 0.970 | 0.834 | 0.850 | 0.961 | 0.928 |
+| 5 | 0.7124 | 0.787 | 1.864 | 0.658 | 4.13 | 0.970 | 0.832 | 0.849 | 0.961 | 0.928 |
+| 6 | 0.7168 | 0.779 | 1.844 | 0.664 | 4.05 | 0.971 | 0.834 | 0.850 | 0.962 | 0.929 |
+| **7** | **0.7207** | 0.776 | 1.840 | 0.664 | 3.97 | 0.969 | 0.839 | 0.850 | 0.961 | 0.926 |
+| 8 | 0.7202 | 0.772 | 1.826 | 0.666 | 3.91 | 0.971 | 0.838 | 0.850 | 0.962 | 0.927 |
+| 9 | 0.7194 | 0.772 | 1.828 | 0.666 | 3.87 | 0.969 | 0.838 | 0.850 | 0.962 | 0.928 |
+
+- Chosen: epoch 7, val argmax 0.7207. Epochs 8-9 are within the SE (≈ 0.003). ADE / FDE keep improving to epoch 9.
+- Same val metric for comparison:
+  - p3_policy (imitation from p1c_ed05) ep 7: 0.7109;
+  - p3_heads ep 5 argmax: 0.7430. Its policy was not trained in phase 3, since CE is 0 there; its heads selection
+    (head_all) is 0.8182;
+  - p3_aux ep 5: argmax 0.7472, head_all 0.8264.
+- Official evaluation of epoch 7 submitted 2026-11-21 16:21:
+  - GPU predictions 15303412 (`predictions/p3_imitation_ep07`);
+  - navtest argmax (v1 + v2) 15303413;
+  - navhard argmax 15303414;
+  - v1 comfort 15303415.
 
 ### Official evaluation of stage 1: p1d_total ep 10 (submitted 2026-11-21 00:24)
 
