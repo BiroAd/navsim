@@ -2,7 +2,7 @@
 
 Official PDM scores of the thesis models, from raw camera images through the NAVSIM devkit scripts. The model-selection
 proxy (navtrain val, precomputed codebook scores) is in [checkpoint_evaluation.md](checkpoint_evaluation.md); runs and
-their settings are in [experiments.md](experiments.md). Last updated 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
+their settings are in [experiments.md](experiments.md). Last updated 2026-11-21: stage 1 official evaluation and one row per training stage (findings 69-70); 2026-11-20: whole-pipeline replicates of RL-3 (findings 65-68); 2026-11-19: seed replicates of p3_aux / p3_heads (findings 59-64); 2026-11-18: v1 PDMS with the v1 comfort term in the main
 tables (findings 51-52), RL-3 with GRPO / Dr. GRPO (53-55), 6 seeds of rl3_b0.005 (56-58).
 
 **Current bests (2026-11-14), all from RL-3 β = 0.005 (p3_aux_policy ep 3 + RL-3, some with EC in the reward), human filter on:**
@@ -1608,6 +1608,89 @@ Reading the sub-scores (D):
 - The EC rule raises navtest EC from 0.72-0.78 to 0.82-0.92. It costs DAC (−0.001 to −0.004 vs the base rule) and
   some EP on the shortlist base (−0.001 to −0.004). EP is unchanged on the argmax and mixture bases, and TTC on all
   bases. This is the same in all four runs (findings 27-28).
+
+### Stage 1 official evaluation and one row per training stage (2026-11-21)
+
+p1d_total ep 10 is the phase 1 model that every phase 3 model starts from (p3_heads, p3_aux and their seeds;
+p3_imitation). Before this it had only the offline val proxy (val argmax 0.698, head_all 0.753;
+checkpoint_evaluation.md).
+
+Same pipeline and rules as stage 2 (experiments.md, "Official evaluation of stage 1"):
+- GPU predictions 15282853: 16 min, peak 61.2 GiB of the 64000M request; the checkpoint is a full 9.4 GB file.
+- Scoring 15282854-58 and v1 comfort 15282859-60.
+- All jobs completed: 12,146 valid navtest scenes, 0 invalid navhard scenes.
+
+| p1d_total ep 10 | PDMS | NC | DAC | DDC | TLC | EP | TTC | LK | HC | EC | score 0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| navtest v2, argmax | **0.7687** | 0.9609 | 0.8658 | 0.9720 | 0.9970 | 0.8702 | 0.9501 | 0.9334 | 0.9828 | 0.8045 | 16.85% |
+| navtest v2, heads (score_heads) | 0.7558 | 0.9820 | 0.9508 | 0.9928 | 0.9984 | 0.7464 | 0.9675 | 0.9190 | 0.9665 | 0.1474 | 6.83% |
+| navtest v2, heads (score_heads_v1) | 0.7484 | 0.9777 | 0.9351 | 0.9765 | 0.9969 | 0.7917 | 0.9653 | 0.9070 | 0.9719 | 0.1650 | 9.26% |
+
+| p1d_total ep 10 | **v1 PDMS (v1 comfort)** | v1 PDMS (HC) | NC | DAC | TTC | EP | v1 comfort | score 0 |
+|---|---|---|---|---|---|---|---|---|
+| navtest v1, argmax | 0.7881 | 0.7865 | 0.9609 | 0.8658 | 0.9501 | 0.8702 | 0.9984 | 16.24% |
+| navtest v1, heads (score_heads_v1) | **0.8119** | 0.8279 | 0.9777 | 0.9351 | 0.9653 | 0.7917 | 0.8648 | 8.35% |
+
+| p1d_total ep 10, navhard | **combined** | stage one | stage two | stage one NC / DAC / EP / EC | stage two NC / DAC / EP / LK / EC |
+|---|---|---|---|---|---|
+| argmax | 0.170 | 0.544 | 0.302 | 0.942 / 0.662 / 0.835 / 0.716 | 0.751 / 0.573 / 0.841 / 0.452 / 0.666 |
+| heads (score_heads) | **0.264** | 0.637 | 0.404 | 0.977 / 0.876 / 0.648 / 0.098 | 0.876 / 0.738 / 0.669 / 0.505 / 0.132 |
+
+The other stage-one / stage-two sub-scores:
+
+| Rule | Stage | DDC | TLC | TTC | LK | HC |
+|---|---|---|---|---|---|---|
+| argmax | stage one | 0.944 | 0.996 | 0.918 | 0.871 | 0.976 |
+| argmax | stage two | 0.767 | 0.979 | 0.737 | – | 0.957 |
+| heads | stage one | 0.989 | 1.000 | 0.969 | 0.907 | 0.951 |
+| heads | stage two | 0.892 | 0.986 | 0.859 | – | 0.949 |
+
+(Stage-two LK is in the table above.)
+
+**One row per training stage** (aux path; for section 6.3). Stage 1 is a single run. Stages 2-4 give seed 0 and, in
+brackets, the mean ± SD over the 4 seed replicates (stage 2/3: findings 59-64; RL-3: the 4 pipeline runs, finding
+68). v1 = v1 PDMS with the v1 comfort term; v1 uses the _v1 variant of each rule.
+
+| Stage | Model | Rule | navtest v2 | navtest v1 | navhard |
+|---|---|---|---|---|---|
+| 1. phase 1 (heads, policy, planner queries; backbone frozen) | p1d_total ep 10 | argmax | **0.7687** | 0.7881 | 0.170 |
+| | | heads | 0.7558 | **0.8119** | **0.264** |
+| 2. phase 3 (+ LLM / vision LoRA, sub-score + aux losses) | p3_aux | heads | 0.8122 (0.8117 ± 0.0021) | 0.8792 (0.8790 ± 0.0007) | 0.363 (0.360 ± 0.004) |
+| | p3_heads (no aux) | heads | 0.8044 (0.8042 ± 0.0007) | 0.8713 (0.8720 ± 0.0013) | 0.342 (0.344 ± 0.004) |
+| 3. policy head on top (score-weighted labels) | p3_aux_policy | argmax | 0.8433 (0.8427 ± 0.0018) | 0.8627 (0.8621 ± 0.0021) | 0.254 (0.257 ± 0.004) |
+| | | shortlist k 256 | 0.8674 (0.8675 ± 0.0008) | 0.8924 (0.8933 ± 0.0011) | 0.386 (0.372 ± 0.015) |
+| | p3_heads_policy (no aux) | shortlist k 256 | 0.8585 (0.8619 ± 0.0024) | 0.8838 (0.8863 ± 0.0021) | 0.337 (0.352 ± 0.012) |
+| 4. RL-3 (β 0.005) | rl3_b0.005 | argmax | 0.8920 (0.8914 ± 0.0019) | 0.9143 (0.9146 ± 0.0015) | 0.365 (0.365 ± 0.008) |
+| | | shortlist k 256 | 0.8829 (0.8825 ± 0.0007) | 0.9110 (0.9104 ± 0.0004) | 0.412 (0.405 ± 0.006) |
+| | | best rule: mixture + EC n 64 / mixture_v1 λ 10 / shortlist + EC n 64 | **0.9062 (0.9064 ± 0.0016)** | **0.9178 (0.9183 ± 0.0005)** | **0.434 (0.435 ± 0.007)** |
+
+69. **Stage 1 already shows the heads-vs-policy trade-off of every later stage.**
+    - Selecting with the heads is safer than argmax:
+      - NC 0.982 vs 0.961, DAC 0.951 vs 0.866;
+      - scenes scored 0: 6.8% vs 16.9%;
+      - navhard stage one 0.637 vs 0.544.
+    - But it is temporally inconsistent and slower: EC 0.15 vs 0.80, EP 0.746 vs 0.870.
+    - So the heads win where EC does not count or counts little: navtest v1 +0.024, navhard +0.094. They lose on
+      navtest v2 (−0.013).
+    - At stage 1 the argmax's weakness is drivable area (DAC 0.866, 0.662 in navhard stage one). The policy stage raises
+      it to 0.934-0.940 (stage 3 argmax, 4 seeds) and RL-3 to 0.98.
+70. **Gain per stage, best evaluated rule at each stage (aux path, 4-seed means from stage 2 on):**
+
+    | Step | navtest v2 | navtest v1 | navhard |
+    |---|---|---|---|
+    | stage 1 → 2 (phase 3) | 0.769 → 0.812 (+0.043) | 0.812 → 0.879 (+0.067) | 0.264 → 0.360 (+0.096) |
+    | stage 2 → 3 (policy head) | → 0.868 (+0.056) | → 0.893 (+0.014) | → 0.372 (+0.012; k 64: 0.383, +0.023) |
+    | stage 3 → 4 (RL-3 + EC rule) | → 0.906 (+0.039) | → 0.918 (+0.025) | → 0.435 (+0.063) |
+
+    - Phase 3 (LoRA on the LLM and the vision tower, training the heads) is the largest step on v1 and navhard.
+    - The policy head is the largest step on navtest v2, through EC (the shortlist keeps the heads' safety and adds
+      consistency).
+    - RL-3 with the test-time EC rule is the second-largest step on v1 and navhard, and the smallest on navtest v2
+      (+0.039, still large).
+    - All navtest steps are at least 6× the largest navtest seed SD (≤ 0.0024). On navhard, stage 1 → 2 and 3 → 4
+      are 6-24× the seed SDs, but stage 2 → 3 with k 256 (+0.012) is within the k 256 seed SD (0.015). With k 64
+      (+0.023, SD 0.006) the step is clear. The stage 1 seed spread is UNKNOWN (one run); the stage 1 → 2 steps are
+      20-100× the stage 2 SDs.
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 

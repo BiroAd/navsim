@@ -1296,6 +1296,12 @@ one official row per training stage.
 **Setup.** Same selections, k and pipeline as the stage 2 official evaluation. Log
 `exp/seed_aux_heads/stage1_official_2026-11-21.txt`.
 
+**Status 2026-11-21 01:18: all 8 jobs completed.**
+- Durations: predict 16 min (peak 61.2 GiB of 64000M); navtest scoring 19 min, navhard 31 min, v1 comfort 16 min.
+- Results: navtest v2 argmax 0.7687 / heads 0.7558; v1 (v1 comfort) argmax 0.7881 / heads_v1 0.8119; navhard argmax
+  0.170 / heads 0.264.
+- Details and the one-row-per-stage table: final_evaluation.md, "Stage 1 official evaluation" (findings 69-70).
+
 ### RL-3 with the GRPO objective (submitted 2026-11-17)
 
 Question: does the sampled objective (GRPO) match or beat the exact objective once the LoRA trains (RL-3)? On the
