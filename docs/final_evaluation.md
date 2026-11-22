@@ -2183,8 +2183,10 @@ Figures in `exp/qualitative/aux/`:
 
 ### Qualitative results (2026-11-22)
 
-Figures in `exp/qualitative/` (`scripts/visualization/plot_qualitative.py`, `plot_aux_maps.py`; CPU jobs mounting
-the sensor images); the curated set with a description of every image: `exp/qualitative/selected/README.md`.
+Figures in `exp/qualitative/` (`scripts/visualization/plot_qualitative.py`, `plot_aux_maps.py`, `plot_navhard.py`;
+CPU jobs mounting the sensor images); curated sets with a caption per image: `exp/qualitative/selected/README.md` and,
+thesis style (no tokens or in-image text, score breakdowns, a navhard example, representative aux scenes),
+`exp/qualitative/selected2/README.md` (renders in `exp/qualitative_v2/`).
 
 **Model.** RL-3 `rl3_b0.005_ep01` with its own scorer `p3_aux_policy_ep03`, navtest.
 
@@ -2217,8 +2219,9 @@ through its 8 logged poses.
   on lane cells only); `drift_backbones.png` shows the same decoder on the p3_aux, RL-3 and p3_heads backbones.
 
 77. **What the figures show (mechanisms behind the numbers).**
-    - **The shortlist works as "heads filter, policy chooses."** At a red light or in a queue, argmax and the heads'
-      single best entry collide while the shortlist stops (selected 01-02). Where the mixture keeps argmax's plan,
+    - **The shortlist works as "heads filter, policy chooses."** At a junction with crossing traffic or in a queue,
+      argmax and the heads' single best entry collide (NC and TTC fail; traffic-light compliance passes) while the
+      shortlist waits (selected 01-02). Where the mixture keeps argmax's plan,
       only the hard shortlist rescues the scene (02); this is why the shortlist base wins on navhard (finding 57).
     - **The heads alone are a poor chooser.**
       - Behind a slow vehicle their best-scored entry can collide (03).
@@ -2237,6 +2240,17 @@ through its 8 logged poses.
       override the heads' safety signal.
     - **The aux decoder reproduces road layout, junctions and the drivable edge; vehicles come out as blobs.** On
       RL-3's backbone the maps are nearly unchanged, on p3_heads' they are blurred (finding 76).
+    - **navhard: the shortlist rescues the policy on synthetic starts.** On the 5,462 stage-two scenes the shortlist
+      turns an argmax failure (≤ 0.3) into a success (≥ 0.8) in 114 scenes (2.1%), the reverse in 52 (1.0%); scenes
+      scored 0 drop from 34.3% to 29.6% (stage one 12.4% → 9.6%). Typical case: from the perturbed start the policy's
+      most likely plan leaves the road, the shortlist keeps it on the road (selected2 13-14).
+    - **The scorer does not encode the route at low speed.** In slow turns the heads' choice and the shortlist can go
+      straight: below 5 m of reference progress NAVSIM sets ego progress to 1 for every plan, so neither the metric
+      nor the scorer trained on it prefers the turn (selected2 04-05).
+    - **Camera projection check:** map lane centrelines projected with the pinhole model and the annotation-based
+      ground height follow the painted lanes; the stored distortion coefficients do not apply to these images
+      (they distort the projection). Camera overlays are geometrically right but show the near field (first 3-5 m) and
+      differences between plans poorly, so the BEV is the comparison view.
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 

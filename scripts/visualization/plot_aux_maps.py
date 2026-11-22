@@ -94,6 +94,7 @@ def main():
     p.add_argument("--sensor-path", required=True)
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--drift-scenes", type=int, nargs="*", default=[0], help="scene indices of the backbone figures")
     args = p.parse_args()
     m = np.load(args.maps)
     tokens, logs = list(m["token"]), list(m["log"])
@@ -131,7 +132,6 @@ def main():
         cb = fig.colorbar(im, cax=fig.add_axes([0.70, 0.075, 0.25, 0.018]), orientation="horizontal")
         cb.set_label("travel direction relative to ego heading (deg; 0 = same as ego)", fontsize=8)
         fig.legend(handles=legend, loc="lower left", ncol=6, fontsize=8, frameon=False, bbox_to_anchor=(0.01, 0.0))
-        fig.suptitle(f"aux decoder of p3_aux ep 5 on backbone: {labels[0]} | {log} | token {tok}", fontsize=10, y=0.995)
         fig.subplots_adjust(left=0.01, right=0.99, top=0.96, bottom=0.14)
         f = out / f"{i:02d}_{tok}.png"
         fig.savefig(f, dpi=args.dpi)
@@ -139,30 +139,38 @@ def main():
         index.append(f"| `scenes/{f.name}` | {tok} | {log} |")
         print(f, flush=True)
     (args.out_dir / "index.md").write_text("\n".join(index) + "\n")
-    if comp:  # drift figure: rows = scenes (first 6), columns = backbones x (semantics, drivable)
-        n = min(6, len(tokens))
-        cols = 2 + 2 * (1 + len(comp))  # camera, GT semantics, then (semantics, drivable) per backbone
-        fig, axes = plt.subplots(n, cols, figsize=(2.1 * cols + 2.5, 3.0 * n),
-                                 gridspec_kw={"width_ratios": [2.4] + [1] * (cols - 1)})
-        for r in range(n):
-            camera(axes[r, 0], loader.get_scene_from_token(tokens[r]))
-            show_sem(axes[r, 1], m["sem_target"][r], "GT semantics" if r == 0 else "")
-            for k, (mm, lab) in enumerate(zip([m, *comp], labels)):
-                j = [list(mm["token"]).index(tokens[r])]
-                show_sem(axes[r, 2 + 2 * k], mm["sem_pred"][j[0]], f"semantics: {lab}" if r == 0 else "")
-                if 3 + 2 * k < cols:
-                    show_drv(axes[r, 3 + 2 * k], mm["drv_prob"][j[0]], m["drv_target"][r],
-                             f"drivable: {lab}" if r == 0 else "")
-        rows = [f"{lab}: mIoU {metrics[f]['bev_miou']:.3f}, drivable IoU {metrics[f]['drivable_iou']:.3f}, "
-                f"heading acc {metrics[f]['lane_heading_acc']:.3f}" for f, lab in zip([args.maps, *args.compare], labels)
-                if f in metrics]
-        fig.suptitle("same aux decoder (p3_aux ep 5), different backbones | " + " | ".join(rows), fontsize=9)
-        fig.legend(handles=legend, loc="lower center", ncol=6, fontsize=8, frameon=False)
-        fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.04, wspace=0.04, hspace=0.1)
-        f = args.out_dir / "drift_backbones.png"
-        fig.savefig(f, dpi=args.dpi)
-        plt.close(fig)
-        print(f)
+    if comp:  # backbone comparison, one figure per --drift-scenes index: rows = ground truth and each backbone,
+        # columns = semantics, drivable area, lane direction; no model names or tokens (labels from --labels)
+        for r in args.drift_scenes:
+            scene = loader.get_scene_from_token(tokens[r])
+            sources = [("ground truth", None)] + list(zip(labels, [m, *comp]))
+            fig = plt.figure(figsize=(9.6, 3.0 + 2.9 * len(sources)))
+            gs = fig.add_gridspec(1 + len(sources), 3, height_ratios=[1.15] + [1.0] * len(sources), hspace=0.08,
+                                  wspace=0.03)
+            camera(fig.add_subplot(gs[0, :]), scene)
+            for row, (lab, mm) in enumerate(sources):
+                axs = [fig.add_subplot(gs[1 + row, c]) for c in range(3)]
+                if mm is None:
+                    show_sem(axs[0], m["sem_target"][r], "")
+                    show_drv(axs[1], m["drv_target"][r], m["drv_target"][r], "")
+                    im = show_head(axs[2], m["head_target"][r], "")
+                else:
+                    j = list(mm["token"]).index(tokens[r])
+                    show_sem(axs[0], mm["sem_pred"][j], "")
+                    show_drv(axs[1], mm["drv_prob"][j], m["drv_target"][r], "")
+                    show_head(axs[2], mm["head_pred"][j], "", mask=mm["drv_prob"][j].astype(np.float32) > 0.5)
+                axs[0].set_ylabel(lab, fontsize=10)
+                if row == 0:
+                    for ax, t in zip(axs, ["BEV semantics", "drivable area", "lane travel direction"]):
+                        ax.set_title(t, fontsize=10)
+            cb = fig.colorbar(im, cax=fig.add_axes([0.66, 0.035, 0.30, 0.012]), orientation="horizontal")
+            cb.set_label("direction relative to ego heading (deg)", fontsize=8)
+            fig.legend(handles=legend, loc="lower left", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.01, 0.0))
+            fig.subplots_adjust(left=0.06, right=0.99, top=0.99, bottom=0.07)
+            f = args.out_dir / f"backbones_scene{r:02d}.png"
+            fig.savefig(f, dpi=args.dpi)
+            plt.close(fig)
+            print(f)
 
 
 if __name__ == "__main__":

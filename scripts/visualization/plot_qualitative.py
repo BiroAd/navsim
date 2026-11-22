@@ -198,7 +198,7 @@ def draw_camera(ax, frame, trajs, title=None, cam_name="cam_f0"):
         c, ls, lw, zo = STYLE[label]
         uv, keep = project(cam, densify(traj), z)
         uv = uv[keep]
-        ax.plot(uv[:, 0], uv[:, 1], color=c, linestyle=ls, linewidth=lw * 1.4, zorder=zo, solid_capstyle="round",
+        ax.plot(uv[:, 0], uv[:, 1], color=c, linestyle=ls, linewidth=lw * 1.0, zorder=zo, solid_capstyle="round",
                 clip_on=True)
     h, w = img.shape[:2]
     ax.set_xlim(0, w)
@@ -249,7 +249,8 @@ def draw_bev(ax, scene, trajs, cand=None, extra=None, lim=None):
 
 
 def fmt_scores(row):
-    bad = [AB[k] for k in SUB if k not in ("ego_progress",) and row[k] < 1]
+    """EPDMS with every sub-score below 1 and its value, e.g. 0.75 (HC 0, EC 0) or 0.98 (EP 0.95)."""
+    bad = [f"{AB[k]} {row[k]:.2f}".replace(" 0.00", " 0") for k in SUB if row[k] < 0.995]
     return f"{row['score']:.2f}" + (f" ({', '.join(bad)})" if bad else "")
 
 
@@ -261,6 +262,9 @@ def scene_info(scene):
 
 
 # ----------------------------------------------------------------------------------------------- figures
+SHORT = {"argmax": "Policy (argmax)", "heads": "Heads only", "shortlist k256": "Shortlist (k = 256)",
+         "mixture λ10": "Mixture (λ = 10)", "mixture + EC n64": "Mixture + consistency",
+         "argmax + EC n64": "Policy + consistency", "shortlist + EC n64": "Shortlist + consistency"}
 RULE_TITLES = {  # panel titles: what each rule does
     "argmax": "Policy only (argmax)\nmost likely trajectory",
     "heads": "Sub-score heads only\nbest predicted score",
@@ -380,40 +384,16 @@ def run_rules(args):
             top = gs[0, :].subgridspec(1, 3, wspace=0.01)
             cam_axes = [fig.add_subplot(top[0, k]) for k in range(3)]
             three_cameras(cam_axes, frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]})
-            d_end = float(np.linalg.norm(tr["mixture + EC n64"][-1, :2]))
-            if d_end < 6.0:  # its end point lies below the image
-                cam_axes[1].text(0.5, 0.04, f"final rule: stops within {d_end:.1f} m (below the image)",
-                                 transform=cam_axes[1].transAxes, ha="center", color="white", fontsize=9,
-                                 bbox=dict(facecolor="#d62728", alpha=0.85, edgecolor="none"))
-            fig.text(0.5, 0.945, "cameras: logged human (black dashed) and the final rule, mixture + consistency (red); "
-                     "stars = end points", ha="center", fontsize=9)
             same = {k: [j for j in list(tr)[: list(tr).index(k)] if np.abs(tr[j] - tr[k]).max() < 1e-3] for k in tr}
             for j, (k, traj) in enumerate(tr.items()):
                 ax = fig.add_subplot(gs[1, j])
-                c = None
-                if k == "argmax":
-                    c = dict(cand, short_xy=np.zeros((0, 2)))
-                elif k == "heads":
-                    c = dict(cand, policy_xy=np.zeros((0, 2)), policy_p=np.zeros(0))
-                elif k == "shortlist k256":
-                    c = cand
-                draw_bev(ax, scene, {"human": hum, k: traj}, c, lim=lim)
-                note = f" = {same[k][0]}" if same[k] else ""
-                ax.set_title(f"{RULE_TITLES[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}{note}", fontsize=8.5,
+                draw_bev(ax, scene, {"human": hum, k: traj}, None, lim=lim)
+                ax.set_title(f"{SHORT[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}", fontsize=9.5,
                              color="#b00000" if scores[k].loc[tok, "score"] < 0.5 else "black")
-            handles = [plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8),
-                       plt.Line2D([], [], color="0.45", marker="x", linestyle=""),
-                       plt.Line2D([], [], color=plt.cm.viridis(0.9), marker="o", linestyle=""),
-                       plt.Line2D([], [], color="0.3", marker="*", linestyle="", markersize=10)]
-            labels = [f"logged human: EPDMS {fmt_scores(human.loc[tok])}", "heads' 256 best-scored end points",
-                      f"policy's 200 most likely end points (colour: log p; top p = {cand['p_argmax']:.2f})",
-                      "end point (on the ego = stop)"]
-            fig.legend(handles, labels, loc="lower center", ncol=4, fontsize=9, frameon=False,
-                       title="EPDMS = per-scene navtest v2 score (extended PDM score); failed terms in brackets (NC collision, DAC off-road, "
-                             "TTC time to collision, EC inconsistent with t − 0.5 s, LK lane keeping, DDC direction)",
-                       title_fontsize=8.5)
-            fig.suptitle(f"{cat.replace('_', ' ')}: {scene_info(scene)} | token {tok}", fontsize=10.5, y=0.995)
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.10)
+            fig.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8)],
+                       [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"], loc="lower center", fontsize=10,
+                       frameon=False)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.98, bottom=0.06)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
@@ -519,8 +499,6 @@ def run_consecutive(args):
             k_main = CONSEC_CATS[cat][1]
             three_cameras([fig.add_subplot(top[0, j]) for j in range(3)], scene.frames[3], {"human": hum, k_main: tr[k_main]},
                           dotted={"prev": (prev_in[k_main], STYLE[k_main][0])})
-            fig.text(0.5, 0.965, f"cameras at t: logged human (black dashed); {RULE_TITLES[k_main].splitlines()[0]} at t "
-                     "(solid) and its plan from t − 0.5 s (dotted)", ha="center", fontsize=9)
             row_txt = []
             for r, keys in enumerate(CONSEC_ROWS):
                 for j, k in enumerate(keys):
@@ -530,28 +508,18 @@ def run_consecutive(args):
                     row = scores[k].loc[tok]
                     passed = row["two_frame_extended_comfort"] == 1
                     jm = float(np.linalg.norm(prev_in[k][-1, :2] - tr[k][-1, :2]))
-                    ax.set_title(f"{RULE_TITLES[k]}\nEC {'pass' if passed else 'FAIL'} · end point moved {jm:.1f} m · "
-                                 f"EPDMS {fmt_scores(row)}", fontsize=8.5, color="black" if passed else "#b00000")
+                    ax.set_title(f"{SHORT[k]}: EC {'pass' if passed else 'fail'}, moved {jm:.1f} m\n"
+                                 f"EPDMS {fmt_scores(row)}", fontsize=9.5, color="black" if passed else "#b00000")
                     row_txt.append(f"{'pass' if passed else 'fail'} / {jm:.1f} m")
             ax = fig.add_subplot(gs[2, 3])
             hum_prev = to_frame(loader2.get_scene_from_token(prev).get_future_trajectory().poses, pp, pc)
             draw_bev(ax, scene, {"human": hum}, extra={"t − 0.5 s": (hum_prev, "0.35", ":")}, lim=lim)
             hrow = human.loc[tok]
             hpass = hrow["two_frame_extended_comfort"] == 1
-            ax.set_title(f"Logged human (expert driver)\nits trajectory at t (dashed) and at t − 0.5 s (dotted)\n"
-                         f"EC {'pass' if hpass else 'FAIL'} · end point moved "
-                         f"{np.linalg.norm(hum_prev[-1, :2] - hum[-1, :2]):.1f} m · EPDMS {fmt_scores(hrow)}",
-                         fontsize=8.5, color="black" if hpass else "#b00000")
-            ax = fig.add_axes([0.0, 0.0, 1.0, 0.035])
-            ax.axis("off")
-            ax.text(0.5, 0.5, "black dashed: logged human · solid: the rule's plan at t · dotted: the plan the same rule "
-                    "(or the human) output at t − 0.5 s, moved into the frame at t · stars: end points (on the ego = stop) · "
-                    "top row: base rules, bottom row: with the consistency rule · EC passes when the two plans agree in "
-                    "acceleration, jerk, yaw rate and yaw acceleration (RMS) where they overlap, not by end point",
-                    ha="center", va="center", fontsize=8.5, wrap=True, transform=ax.transAxes)
-            fig.suptitle(f"{cat.replace('_', ' ')}: {scene_info(scene)} | t {tok}, t − 0.5 s {prev}", fontsize=10.5,
-                         y=0.995)
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.05)
+            ax.set_title(f"Human (logged): EC {'pass' if hpass else 'fail'}, moved "
+                         f"{np.linalg.norm(hum_prev[-1, :2] - hum[-1, :2]):.1f} m\nEPDMS {fmt_scores(hrow)}",
+                         fontsize=9.5, color="black" if hpass else "#b00000")
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.98, bottom=0.01)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
