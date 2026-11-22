@@ -162,7 +162,7 @@ def main():
         # title lines, the square maps side by side, a gap and the legend
         n = len(cols)
         map_w = (0.98 * pq.PRINT_W) / (n + 0.04 * (n - 1))
-        rows = [pq.CAM_LABEL_H, pq.CAM_H] * n + [0.62, map_w, 0.06, 0.62]
+        rows = [pq.CAM_LABEL_H, pq.CAM_H] * n + [0.62, map_w, 0.06, 0.62]  # legend: 16 entries, 4 rows
         fig = plt.figure(figsize=(pq.PRINT_W, sum(rows) / 0.985))
         gs = fig.add_gridspec(len(rows), n, height_ratios=rows, hspace=0, wspace=0.04)
         r0 = 2 * n  # first row after the camera strips

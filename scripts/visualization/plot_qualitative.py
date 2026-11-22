@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 
 import matplotlib
+import matplotlib.patheffects
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -41,10 +42,19 @@ from navsim.common.dataloader import SceneLoader  # noqa: E402
 from navsim.visualization.bev import add_configured_bev_on_ax  # noqa: E402
 from navsim.visualization.camera import _transform_points_to_image  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
+from nuplan.common.actor_state.tracked_objects_types import TrackedObjectType  # noqa: E402
+from navsim.visualization.config import AGENT_CONFIG  # noqa: E402
 
 PRINT_W = 6.0  # in: thesis text width 150 mm; fonts 7-8 pt at that size
 plt.rcParams.update({"font.size": 8, "axes.titlesize": 7.5, "legend.fontsize": 6.8, "xtick.labelsize": 7,
                      "ytick.labelsize": 7})
+
+# NAVSIM draws every agent box with a black 1.0 pt outline and heading line, which hides the fill of small boxes at
+# print size; thinner outlines for the agents in these figures only (the ego box keeps NAVSIM's style; the upstream
+# config file is not changed)
+for _t, _c in AGENT_CONFIG.items():
+    if _t != TrackedObjectType.EGO:
+        AGENT_CONFIG[_t] = {**_c, "line_width": 0.4}
 
 E = Path(os.environ["NAVSIM_EXP_ROOT"])
 D = Path(os.environ["OPENSCENE_DATA_ROOT"])
@@ -256,6 +266,84 @@ def draw_bev(ax, scene, trajs, cand=None, extra=None, lim=None):
 AGENT_COLORS = {"vehicle": "#699CDB", "pedestrian": "#b07aa1", "bicycle": "#E38C47"}  # NAVSIM BEV colours
 
 
+def darker(col, f=0.75):
+    """the colour scaled towards black (future outlines: visible on the grey road in print)"""
+    return tuple(np.array(matplotlib.colors.to_rgb(col)) * f)
+
+
+def poses8(traj):
+    """the 8 scored poses (0.5 ... 4.0 s) of a drawn plan: the 40-step codebook entry at indices 4::5"""
+    t = np.asarray(traj, dtype=float)
+    return t[4::5] if len(t) == 40 else t
+
+
+class CollisionSnapshot:
+    """NAVSIM's own at-fault collision for a plan: pdm_score_from_interpolated_trajectory (navsim/evaluate/pdm_score.py)
+    replicated up to the first scorer.score_proposals call (the human-filter call after it would overwrite the scorer's
+    state), with the official scoring config (default_run_pdm_score; navtest: non-reactive traffic). Returns the first
+    at-fault collision time, the simulated ego polygon and the polygons of the agents it intersects at that time, in
+    the ego frame of the current frame, or None if the plan does not collide. NAVSIM code is used unchanged."""
+
+    def __init__(self, metric_cache_path, traffic="non_reactive"):
+        from hydra import compose, initialize_config_dir
+        from navsim.common.dataloader import MetricCacheLoader
+        with initialize_config_dir(config_dir=str(REPO / "navsim/planning/script/config/pdm_scoring"), version_base=None):
+            cfg = compose(config_name="default_run_pdm_score", overrides=[f"traffic_agents={traffic}"])
+        self.simulator, self.scorer = instantiate(cfg.simulator), instantiate(cfg.scorer)
+        self.policy = instantiate(cfg.traffic_agents_policy[traffic], self.simulator.proposal_sampling)
+        self.loader = MetricCacheLoader(Path(metric_cache_path))
+
+    def __call__(self, token, poses8):
+        from navsim.common.dataclasses import Trajectory
+        from navsim.evaluate.pdm_score import get_trajectory_as_array, transform_trajectory
+        from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
+        mc = self.loader.get_from_token(token)
+        sampling = self.simulator.proposal_sampling
+        pred = transform_trajectory(Trajectory(np.asarray(poses8, dtype=np.float32),
+                                               TrajectorySampling(time_horizon=4, interval_length=0.5)), mc.ego_state)
+        states = np.concatenate([get_trajectory_as_array(mc.trajectory, sampling, mc.ego_state.time_point)[None],
+                                 get_trajectory_as_array(pred, sampling, mc.ego_state.time_point)[None]], axis=0)
+        sim = self.simulator.simulate_proposals(states, mc.ego_state)
+        tracks = self.policy.simulate_environment(sim[1], mc)
+        res = self.scorer.score_proposals(sim, mc.observation, mc.centerline, mc.route_lane_ids, mc.drivable_area_map,
+                                          mc.map_parameters, tracks, mc.past_human_trajectory)[1]
+        sc = self.scorer
+        nc = float(np.asarray(res.no_at_fault_collisions).reshape(-1)[0])
+        if not np.isfinite(sc._collision_time_idcs[1]):
+            return {"nc": nc, "t": None}
+        ti = int(sc._collision_time_idcs[1])
+        ego_poly = sc._ego_polygons[1, ti]
+        hit = sc._observation[ti].query(ego_poly, predicate="intersects")
+        toks = [sc._observation[ti].tokens[g] for g in np.atleast_1d(hit)]
+        toks = [t for t in toks if sc._observation.red_light_token not in t]
+        o = mc.ego_state.rear_axle  # the ego frame of the figures (rear axle at the current frame)
+        c, s_ = np.cos(o.heading), np.sin(o.heading)
+
+        def local(poly):
+            xy = np.asarray(poly.exterior.coords) - [o.x, o.y]
+            return np.stack([c * xy[:, 0] + s_ * xy[:, 1], -s_ * xy[:, 0] + c * xy[:, 1]], 1)
+
+        return {"nc": nc, "t": ti * sampling.interval_length, "ego": local(ego_poly),
+                "agents": [local(sc._observation[ti][t]) for t in toks]}
+
+
+def draw_collision(ax, snap, colour):
+    """the ego (plan's colour) and the agent(s) it hits (dark), at NAVSIM's first at-fault collision, with its time"""
+    for a in snap["agents"]:
+        ax.fill(a[:, 1], a[:, 0], facecolor="none", edgecolor="#1a1a1a", linewidth=1.0, zorder=44)
+    e = snap["ego"]
+    ax.plot(e[:, 1], e[:, 0], color=colour, linewidth=1.1, zorder=45)
+    # time label beside the ego outline, on the side away from the agent hit (lateral = data y, the plot's x axis)
+    ey = e[:-1, 1].mean()
+    side = np.sign(ey - np.mean([a[:-1, 1].mean() for a in snap["agents"]])) if snap["agents"] else 1.0
+    side = side or 1.0
+    y_lab = (e[:, 1].max() if side > 0 else e[:, 1].min()) + 0.4 * side
+    right = ax.transData.transform((y_lab, 0))[0] > ax.transData.transform((ey, 0))[0]  # axis may be inverted
+    txt = ax.text(y_lab, e[:-1, 0].mean(), f"{snap['t']:.1f} s", fontsize=6, color=colour, va="center",
+                  ha="left" if right else "right", zorder=46)
+    txt.set_path_effects([matplotlib.patheffects.withStroke(linewidth=1.5, foreground="white")])
+
+
 def draw_future_agents(ax, scene, times=(1.0, 2.0, 3.0, 4.0)):
     """Moving agents at +1 ... +4 s (fading dashed outlines) in the current ego frame: makes collisions with agents that
     are not yet next to the ego at t visible."""
@@ -276,22 +364,25 @@ def draw_future_agents(ax, scene, times=(1.0, 2.0, 3.0, 4.0)):
             cx = np.array([L, L, -L, -L, L]) / 2
             cy = np.array([W, -W, -W, W, W]) / 2
             px, py = x + np.cos(hd) * cx - np.sin(hd) * cy, y + np.sin(hd) * cx + np.cos(hd) * cy
-            ax.plot(py, px, color=col, linewidth=0.7, linestyle=(0, (2, 1.4)), alpha=0.75 - 0.15 * k, zorder=15)
+            ax.plot(py, px, color=darker(col), linewidth=1.1 - 0.15 * k, linestyle=(0, (2, 1.4)),
+                    alpha=0.95 - 0.17 * k, zorder=15)  # +1 s darkest and thickest, fading to +4 s
 
 
-def map_legend_handles(future=True):
+def map_legend_handles(future=True, footprint=False):
     """Legend entries for the BEV map and agent colours (navsim/visualization/config.py)."""
     h = [Patch(facecolor="#D3D3D3", label="road"), Patch(facecolor="#d4d19e", label="walkway"),
          Patch(facecolor="#b9d3b4", label="car park"), Patch(facecolor="#b07aa1", alpha=0.3, label="crosswalk"),
          plt.Line2D([], [], color="#666666", linestyle="--", linewidth=0.8, label="lane centreline"),
-         Patch(facecolor="#699CDB", edgecolor="black", linewidth=0.5, label="vehicle"),
-         Patch(facecolor="#b07aa1", edgecolor="black", linewidth=0.5, label="pedestrian"),
-         Patch(facecolor="#E38C47", edgecolor="black", linewidth=0.5, label="bicycle"),
-         Patch(facecolor="#edc948", edgecolor="black", linewidth=0.5, label="static object"),
+         Patch(facecolor="#699CDB", edgecolor="black", linewidth=0.4, label="vehicle"),
+         Patch(facecolor="#b07aa1", edgecolor="black", linewidth=0.4, label="pedestrian"),
+         Patch(facecolor="#E38C47", edgecolor="black", linewidth=0.4, label="bicycle"),
+         Patch(facecolor="#edc948", edgecolor="black", linewidth=0.4, label="static object"),
          Patch(facecolor="#DE7061", edgecolor="black", linewidth=0.5, label="ego vehicle")]
     if future:
-        h.append(plt.Line2D([], [], color="#699CDB", linestyle=(0, (2, 1.4)), linewidth=0.8,
+        h.append(plt.Line2D([], [], color=darker("#699CDB"), linestyle=(0, (2, 1.4)), linewidth=1.0,
                             label="agents at +1 … +4 s (fading)"))
+    if footprint:
+        h.append(Patch(facecolor="none", edgecolor="0.3", linewidth=1.0, label="collision: ego, agent hit"))
     h.append(plt.Line2D([], [], color="0.3", marker="*", linestyle="", markersize=7, label="end point"))
     return h
 
@@ -381,7 +472,7 @@ def select_rules(scores, human, rules, rng, n_top, n_rand, log_of):
 
 # print layout, 6 in wide, margins 0.01: three map columns (wspace 0.04) are 1.91 in wide; three camera images
 # (wspace 0.02, sky cropped: 1920 x 745 px) are 1.93 x 0.75 in, with a 0.14 in label row above them
-MAP_W, CAM_H, CAM_LABEL_H = 1.91, 0.75, 0.14
+MAP_W, CAM_H, CAM_LABEL_H = 1.91, 0.75, 0.18
 CAM_LABELS = {"cam_l0": "front left", "cam_f0": "front", "cam_r0": "front right"}
 
 
@@ -391,7 +482,7 @@ def camera_row(fig, spec, prefix=""):
     sub = spec.subgridspec(1, 3, wspace=0.02)
     axes = [fig.add_subplot(sub[0, j]) for j in range(3)]
     for j, (ax, lab) in enumerate(zip(axes, CAM_LABELS.values())):
-        ax.set_title(prefix + lab if j == 0 else lab, fontsize=6.5, pad=1.5, color="#333333")
+        ax.set_title(prefix + lab if j == 0 else lab, fontsize=6.5, pad=2.5, color="#333333")
     return axes
 
 
@@ -416,6 +507,7 @@ def three_cameras(axes, frame, trajs, dotted=None, cams=("cam_l0", "cam_f0", "ca
 
 def run_rules(args):
     rules = Rules(args.model, args.scorer, args.ec_folder)
+    snap = CollisionSnapshot(E / "metric_cache_navtest")  # navtest: official non-reactive scoring
     names = {"argmax": f"{args.model}_argmax", "heads": f"{args.heads_eval}_score_heads",
              "shortlist k256": f"{args.model}_shortlist_k256", "mixture λ10": f"{args.model}_mixture_lam10",
              "mixture + EC n64": f"{args.model}_own_ecseq_mix10_n64_argmax",
@@ -442,9 +534,13 @@ def run_rules(args):
             tr, cand = rules(tok)
             tr = {k: tr[k] for k in RULE5}
             hum = scene.get_future_trajectory().poses
-            lim = bev_extent({"human": hum, **tr})
+            snaps = {k: snap(tok, poses8(tr[k])) for k in RULE5 if scores[k].loc[tok, "no_at_fault_collisions"] == 0}
+            for k, sn in snaps.items():  # NAVSIM's collision for every NC 0 plan (recomputed NC must match)
+                assert sn["nc"] == 0 and sn["t"] is not None, (tok, k, sn)
+            geo = {f"_{k}{j}": g for k, sn in snaps.items() for j, g in enumerate([sn["ego"], *sn["agents"]])}
+            lim = bev_extent({"human": hum, **tr, **geo})  # the collision (ego, agent hit) stays inside the map
             # inches: camera labels, cameras, title, maps, title, maps, gap, legend
-            rows = [CAM_LABEL_H, CAM_H, 0.40, MAP_W, 0.40, MAP_W, 0.06, 0.62]
+            rows = [CAM_LABEL_H, CAM_H, 0.40, MAP_W, 0.40, MAP_W, 0.06, 0.76]
             fig = plt.figure(figsize=(PRINT_W, sum(rows) / 0.98))
             gs = fig.add_gridspec(len(rows), 3, height_ratios=rows, hspace=0, wspace=0.04)
             three_cameras(camera_row(fig, gs[1, :]), frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]})
@@ -453,13 +549,15 @@ def run_rules(args):
                 ax = fig.add_subplot(gs[3 + 2 * (j // 3), j % 3])
                 draw_bev(ax, scene, {"human": hum, k: tr[k]}, None, lim=lim)
                 draw_future_agents(ax, scene)
+                if k in snaps:  # NAVSIM's collision: ego, agent hit, time
+                    draw_collision(ax, snaps[k], STYLE[k][0])
                 ax.set_title(f"{SHORT[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}",
                              color="#b00000" if scores[k].loc[tok, "score"] < 0.5 else "black")
             lax = fig.add_subplot(gs[7, :])
             lax.axis("off")
-            lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + map_legend_handles(),
-                       [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"] +
-                       [h.get_label() for h in map_legend_handles()], loc="upper center", ncol=4, frameon=False,
+            lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] +
+                       map_legend_handles(footprint=True), [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"] +
+                       [h.get_label() for h in map_legend_handles(footprint=True)], loc="upper center", ncol=4, frameon=False,
                        handlelength=1.6, columnspacing=1.0)
             fig.subplots_adjust(left=0.01, right=0.99, top=0.985, bottom=0.005)
             f = out_root / cat / f"{i:02d}_{tok}.png"

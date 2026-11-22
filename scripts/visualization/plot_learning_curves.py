@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 
 import matplotlib
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -150,6 +151,7 @@ def stage3(out):
     family(ax, [series(history(e), k) for e in aux], AUX, "with auxiliary losses", ch_aux)
     family(ax, [series(history(e), k) for e in heads], HEADS, "without auxiliary losses", ch_heads)
     style(ax, "policy head: argmax (val score)")
+    ax.xaxis.set_major_locator(matplotlib.ticker.MaxNLocator(integer=True))  # one validation per epoch
     seed_legend(ax)
     fig.tight_layout()
     fig.savefig(out / "stage3_policy.png", dpi=300)
@@ -174,6 +176,7 @@ def stage4(out):
         family(ax, curves(aux, k), AUX, "start: trained with auxiliary losses", [2.0] * 4)
         family(ax, curves(heads, k), HEADS, "start: trained without auxiliary losses", [2.0] * 4)
         style(ax, t)
+        ax.set_xticks([0.5, 1.0, 1.5, 2.0])  # validation every half epoch
     seed_legend(axes[0])
     fig.tight_layout()
     fig.savefig(out / "stage4_rl.png", dpi=300)
@@ -182,6 +185,7 @@ def stage4(out):
     family(ax, curves(aux, "val/rl/kl_epoch"), AUX, "with auxiliary losses", [2.0] * 4)
     family(ax, curves(heads, "val/rl/kl_epoch"), HEADS, "without auxiliary losses", [2.0] * 4)
     style(ax, "KL to the start policy (nats)")
+    ax.set_xticks([0.5, 1.0, 1.5, 2.0])
     seed_legend(ax, loc="upper right")
     fig.tight_layout()
     fig.savefig(out / "stage4_rl_kl.png", dpi=300)

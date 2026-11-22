@@ -25,9 +25,9 @@ plt = pq.plt
 from navsim.agents.vision_llm_lora.vision_llm_lora_agent import select_trajectory  # noqa: E402
 from navsim.agents.vision_llm_lora.vision_llm_lora_precomputed_agent import load_predictions  # noqa: E402
 
-STAGES = [  # key, title, prediction folder, selection, per-scene score folder, colour
-    ("s1_policy", "Stage 1, frozen backbone: policy", "p1d_total_ep10", "argmax", "p1d_total_ep10_argmax", "#8c564b"),
-    ("s1_heads", "Stage 1, frozen backbone: heads", "p1d_total_ep10", "score_heads", "p1d_total_ep10_score_heads", "#e377c2"),
+STAGES = [  # key, title, prediction folder, selection, per-scene score folder, colour of the rule (as in every figure)
+    ("s1_policy", "Stage 1, frozen backbone: policy", "p1d_total_ep10", "argmax", "p1d_total_ep10_argmax", "#1f77b4"),
+    ("s1_heads", "Stage 1, frozen backbone: heads", "p1d_total_ep10", "score_heads", "p1d_total_ep10_score_heads", "#ff7f0e"),
     ("s2", "Stage 2, LoRA fine-tuning: heads", "p3_aux_ep05", "score_heads", "p3_aux_ep05_score_heads", "#ff7f0e"),
     ("s3", "Stage 3, policy head: shortlist", "p3_aux_policy_ep03", "shortlist", "p3_aux_policy_ep03_shortlist_k256",
      "#2ca02c"),
@@ -54,6 +54,7 @@ def main():
     typ = (s1 > 0.5) & (sc["s2"] > 0.5) & (sc["s3"] > 0.5) & (sc["s4"] > 0.5)
     rng = np.random.default_rng(args.seed)
     loader = pq.scene_loader(list(idx), Path(args.sensor_path))
+    snap = pq.CollisionSnapshot(pq.E / "metric_cache_navtest")
     log_of = lambda t: loader.scene_frames_dicts[t][3]["log_name"]
     sel = {"progress": pq.first_per_log(rng.permutation(np.array(idx[prog])), log_of, args.n),
            "typical": pq.first_per_log(rng.permutation(np.array(idx[typ])), log_of, args.n)}
@@ -91,7 +92,13 @@ def main():
             plans = {s[0]: plan(s, tok) for s in STAGES}
             for s in STAGES:
                 pq.STYLE[s[0]] = (s[5], "-", 2.2, 28)
-            lim = pq.bev_extent({"human": hum, **plans})
+            snaps = {}
+            for st in STAGES:  # NAVSIM's collision for every NC 0 plan (recomputed NC must match)
+                if scores[st[0]].loc[tok, "no_at_fault_collisions"] == 0:
+                    snaps[st[0]] = snap(tok, pq.poses8(plans[st[0]]))
+                    assert snaps[st[0]]["nc"] == 0 and snaps[st[0]]["t"] is not None, (tok, st[0], snaps[st[0]])
+            geo = {f"_{k}{j}": g for k, sn in snaps.items() for j, g in enumerate([sn["ego"], *sn["agents"]])}
+            lim = pq.bev_extent({"human": hum, **plans, **geo})
             # inches: camera labels, cameras, title, maps, title, maps
             rows = [pq.CAM_LABEL_H, pq.CAM_H, 0.40, pq.MAP_W, 0.40, pq.MAP_W]
             fig = plt.figure(figsize=(pq.PRINT_W, sum(rows) / 0.98))
@@ -102,12 +109,14 @@ def main():
                 pq.draw_bev(ax, scene, {"human": hum, s[0]: plans[s[0]]}, None, lim=lim)
                 pq.draw_future_agents(ax, scene)
                 row = scores[s[0]].loc[tok]
+                if s[0] in snaps:  # NAVSIM's collision: ego, agent hit, time
+                    pq.draw_collision(ax, snaps[s[0]], s[5])
                 ax.set_title(f"{s[1]}\nEPDMS {pq.fmt_scores(row)}", color="#b00000" if row["score"] < 0.5 else "black", fontsize=7)
             lax = fig.add_subplot(gs[5, 2])
             lax.axis("off")
-            lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + pq.map_legend_handles(),
-                       [f"human (logged): EPDMS {pq.fmt_scores(human.loc[tok])}"] +
-                       [h.get_label() for h in pq.map_legend_handles()], loc="center", ncol=1, frameon=False,
+            lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] +
+                       pq.map_legend_handles(footprint=True), [f"human (logged): EPDMS {pq.fmt_scores(human.loc[tok])}"] +
+                       [h.get_label() for h in pq.map_legend_handles(footprint=True)], loc="center", ncol=1, frameon=False,
                        handlelength=1.6, labelspacing=0.3)
             fig.subplots_adjust(left=0.01, right=0.99, top=0.985, bottom=0.005)
             f = args.out_dir / cat / f"{i:02d}_{tok}.png"

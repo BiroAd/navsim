@@ -83,7 +83,7 @@ def main():
     res = {"human (logged)": (hum, "black", ddc(hum, pose, route, inter, 0.1)),
            "planner (mixture + consistency)": (plan[:, :2], "#d62728", ddc(plan[:, :2], pose, route, inter, 0.1))}
     trajs = {"human": hum8, "mixture + EC n64": plan}
-    fig, ax = plt.subplots(figsize=(4.8, 5.1))  # print: 0.8 x text width (150 mm)
+    fig, ax = plt.subplots(figsize=(4.8, 4.95))  # print: 0.8 x text width (150 mm)
     lim = pq.bev_extent(trajs, margin=10)
     pq.draw_bev(ax, scene, trajs, None, lim=lim)
     for poly in getattr(route, "geoms", [route]):
@@ -101,7 +101,7 @@ def main():
                        plt.Line2D([], [], color="black", linestyle="--", label="human (logged)"),
                        plt.Line2D([], [], color="#d62728", label="planner (mixture + consistency)"),
                        plt.Line2D([], [], color="#e7298a", marker="o", linestyle="", label="pose outside the route lanes (counts for DDC)")],
-              loc="lower left", fontsize=6.5, framealpha=0.9)
+              loc="upper center", bbox_to_anchor=(0.5, -0.01), ncol=2, fontsize=6.5, frameon=False)  # below the map
     fig.tight_layout()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=300)
