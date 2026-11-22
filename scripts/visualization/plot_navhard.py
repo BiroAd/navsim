@@ -42,7 +42,7 @@ E, D = Path(os.environ["NAVSIM_EXP_ROOT"]), Path(os.environ["OPENSCENE_DATA_ROOT
 SPLIT = "navhard_two_stage"
 RULES = {"argmax": "Policy (argmax)", "shortlist k256": "Shortlist (k = 256)",
          "shortlist + EC n64": "Shortlist + consistency"}
-COLORS = {"argmax": "#1f77b4", "shortlist k256": "#2ca02c", "shortlist + EC n64": "#d62728"}
+COLORS = {"argmax": "#1f77b4", "shortlist k256": "#2ca02c", "shortlist + EC n64": "#006d2c"}  # as in plot_qualitative
 
 
 def per_scene(name):
