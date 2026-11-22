@@ -65,6 +65,9 @@ def main():
     p.add_argument("--model", default="rl3_b0.005_ep01")
     p.add_argument("--scorer", default="p3_aux_policy_ep03")
     p.add_argument("--n-groups", type=int, default=4)
+    p.add_argument("--original-human", action="store_true",
+                   help="synthetic scenes have no future frames; draw the original drive's human path instead "
+                        "(moved into the synthetic frame; not a valid reference from the perturbed start)")
     p.add_argument("--mode", choices=["rescue", "mixed"], default="rescue",
                    help="rescue: original + a synthetic follow-up where argmax <= 0.3 and the shortlist >= 0.8; "
                         "mixed: original + one handled and one failed synthetic follow-up (best rule)")
@@ -124,6 +127,30 @@ def main():
                                     synthetic_sensor_path=D / SPLIT / "sensor_blobs",
                                     synthetic_scenes_path=D / SPLIT / "synthetic_scene_pickles",
                                     sensor_config=SensorConfig(cam_f0=[3], cam_l0=[3], cam_r0=[3], lidar_pc=False, **cams))
+    # synthetic scenes have no future frames: show the logged human of the corresponding original scene instead,
+    # moved into the synthetic start's frame (where the human drove, seen from the perturbed start)
+    sys.path.insert(0, str(REPO / "scripts/evaluation"))
+    from run_pdm_score_balanced import synthetic_scene_index  # noqa: E402
+    from navsim.common.dataclasses import SceneFilter  # noqa: E402
+    syn_meta = {v["initial_token"]: v for v in synthetic_scene_index(D / SPLIT / "synthetic_scene_pickles").values()}
+
+    def human_from_original(tok, scene):
+        meta = syn_meta.get(tok)
+        if meta is None:
+            return None
+        try:
+            f = SceneFilter(num_history_frames=4, num_future_frames=10, frame_interval=1, has_route=False,
+                            max_scenes=None, log_names=[meta["log_name"]], tokens=[meta["corresponding_original_scene"]])
+            orig = dataloader.SceneLoader(D / "navsim_logs/test", Path(args.sensor_path), f,
+                                          sensor_config=SensorConfig.build_no_sensors()).get_scene_from_token(
+                meta["corresponding_original_scene"])
+        except Exception as e:  # noqa: BLE001
+            print(f"no original scene for {tok}: {e}")
+            return None
+        po = np.array(orig.frames[3].ego_status.ego_pose, dtype=float)
+        ps = np.array(scene.frames[scene.scene_metadata.num_history_frames - 1].ego_status.ego_pose, dtype=float)
+        return pq.to_frame(orig.get_future_trajectory().poses, po, ps)
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
     index = [f"# navhard ({args.mode}): original scene and synthetic follow-up(s)", "", "| File | tokens |", "|---|---|"]
     for i, toks in enumerate(groups):
@@ -137,22 +164,28 @@ def main():
             scene = loader.get_scene_from_token(tok)
             frame = scene.frames[scene.scene_metadata.num_history_frames - 1]
             pl = plans(tok)
-            pq.STYLE.update({k: (COLORS[k], "-", 2.2, 28) for k in RULES})
-            pq.draw_camera(fig.add_subplot(gs[0, c]), frame, {"shortlist + EC n64": pl["shortlist + EC n64"]})
+            pq.STYLE.update({"argmax": (COLORS["argmax"], "-", 5.2, 26), "shortlist k256": (COLORS["shortlist k256"], "-", 3.4, 27),
+                             "shortlist + EC n64": (COLORS["shortlist + EC n64"], "-", 1.6, 28)})
+            cam_ax = fig.add_subplot(gs[0, c])
             ax = fig.add_subplot(gs[1, c])
             trajs = dict(pl)
-            try:
+            hum = None
+            if stage == "stage_one":
                 hum = scene.get_future_trajectory().poses
-                if len(hum) == 8 and stage == "stage_one":
-                    trajs = {"human": hum, **pl}
-            except Exception:
-                pass
+            elif args.original_human:  # off by default: that path does not start at the perturbed pose
+                hum = human_from_original(tok, scene)
+            if hum is not None and len(hum) == 8:
+                trajs = {"human": hum, **pl}
             pq.draw_bev(ax, scene, trajs, None, lim=pq.bev_extent(trajs))
-            lines = [f"{RULES[k]}: {fmt(scores[k].loc[tok], stage)}" for k in RULES]
+            pq.draw_camera(cam_ax, frame, {k: v for k, v in trajs.items() if k in ("human", "shortlist + EC n64")})
+            same = {k: [j for j in list(pl)[: list(pl).index(k)] if np.abs(pl[j] - pl[k]).max() < 1e-3] for k in pl}
+            lines = [f"{RULES[k]}: {fmt(scores[k].loc[tok], stage)}" + (f" (= {RULES[same[k][-1]]})" if same[k] else "")
+                     for k in RULES]
             ax.set_title(f"{head}\n" + "\n".join(lines), fontsize=9.5)
-        handles = [plt.Line2D([], [], color=COLORS[k], linewidth=2.2) for k in RULES] + \
+        handles = [plt.Line2D([], [], color=COLORS[k], linewidth=w) for k, w in zip(RULES, [5.2, 3.4, 1.6])] + \
                   [plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8)]
-        fig.legend(handles, list(RULES.values()) + ["human (logged; original scene only)"], loc="lower center",
+        fig.legend(handles, list(RULES.values()) + ["human (logged; original scenes only)"],
+                   loc="lower center",
                    ncol=4, fontsize=10, frameon=False)
         fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.05)
         f = args.out_dir / f"{i:02d}_{toks[0]}.png"
