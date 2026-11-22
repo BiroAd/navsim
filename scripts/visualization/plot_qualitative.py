@@ -58,7 +58,7 @@ STYLE = {  # label -> (colour, line style, width, z-order)
     "argmax + EC n64": ("#17becf", "-", 2.2, 28),
     "shortlist + EC n64": ("#006d2c", "-", 2.2, 28),
 }
-RULE5 = ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64"]  # rules figure panels
+RULE5 = ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64", "shortlist + EC n64"]  # rules panels
 
 
 # ----------------------------------------------------------------------------------------------- data
@@ -355,7 +355,8 @@ def run_rules(args):
     rules = Rules(args.model, args.scorer, args.ec_folder)
     names = {"argmax": f"{args.model}_argmax", "heads": f"{args.heads_eval}_score_heads",
              "shortlist k256": f"{args.model}_shortlist_k256", "mixture λ10": f"{args.model}_mixture_lam10",
-             "mixture + EC n64": f"{args.model}_own_ecseq_mix10_n64_argmax"}
+             "mixture + EC n64": f"{args.model}_own_ecseq_mix10_n64_argmax",
+             "shortlist + EC n64": f"{args.model}_own_ecseq_short256_n64_argmax"}
     scores = {k: per_scene(v) for k, v in names.items()}
     human = per_scene(args.human_eval, suffix="")
     rng = np.random.default_rng(args.seed)
@@ -379,8 +380,8 @@ def run_rules(args):
             tr = {k: tr[k] for k in RULE5}
             hum = scene.get_future_trajectory().poses
             lim = bev_extent({"human": hum, **tr})
-            fig = plt.figure(figsize=(17, 8.0))
-            gs = fig.add_gridspec(2, 5, height_ratios=[0.62, 1.0], hspace=0.22, wspace=0.03)
+            fig = plt.figure(figsize=(20, 7.6))
+            gs = fig.add_gridspec(2, 6, height_ratios=[0.55, 1.0], hspace=0.22, wspace=0.03)
             top = gs[0, :].subgridspec(1, 3, wspace=0.01)
             cam_axes = [fig.add_subplot(top[0, k]) for k in range(3)]
             three_cameras(cam_axes, frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]})
@@ -393,7 +394,7 @@ def run_rules(args):
             fig.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8)],
                        [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"], loc="lower center", fontsize=10,
                        frameon=False)
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.98, bottom=0.06)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.955, bottom=0.06)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
@@ -496,7 +497,7 @@ def run_consecutive(args):
             fig = plt.figure(figsize=(17, 13.2))
             gs = fig.add_gridspec(3, 4, height_ratios=[0.62, 1.0, 1.0], hspace=0.22, wspace=0.03)
             top = gs[0, :].subgridspec(1, 3, wspace=0.01)
-            k_main = CONSEC_CATS[cat][1]
+            k_main = "mixture + EC n64"  # cameras: the final navtest rule in every figure
             three_cameras([fig.add_subplot(top[0, j]) for j in range(3)], scene.frames[3], {"human": hum, k_main: tr[k_main]},
                           dotted={"prev": (prev_in[k_main], STYLE[k_main][0])})
             row_txt = []
@@ -519,7 +520,7 @@ def run_consecutive(args):
             ax.set_title(f"Human (logged): EC {'pass' if hpass else 'fail'}, moved "
                          f"{np.linalg.norm(hum_prev[-1, :2] - hum[-1, :2]):.1f} m\nEPDMS {fmt_scores(hrow)}",
                          fontsize=9.5, color="black" if hpass else "#b00000")
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.98, bottom=0.01)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.965, bottom=0.01)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
