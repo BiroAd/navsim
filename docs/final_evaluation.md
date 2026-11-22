@@ -2233,8 +2233,9 @@ through its 8 logged poses.
       EC compares acceleration, jerk, yaw rate and yaw acceleration (RMS differences), not end points, so a 1.2 m move
       can fail and a 1.6 m move pass.
     - **"Beating the human" is mostly metric-specific.** In the 17 scenes where the best rule ≥ 0.95 and the human
-      ≤ 0.8, the human loses on driving direction (passing a parked van, swinging wide in a right turn), on comfort or
-      on progress, never on collision or off-road (06-07).
+      ≤ 0.8, the human loses on driving direction (passing a parked van; or, in 06, starting in a lane outside the route
+      roadblock and accelerating past DDC's 2 m threshold before the junction, a threshold effect, not a worse
+      manoeuvre: selected2 15), on comfort or on progress, never on collision or off-road (06-07).
     - **Remaining failures are model limits.** At speed, every policy-based plan can be too fast for the lead
       vehicle, even inside the shortlist, while the heads-only choice brakes (08). The policy's preference can
       override the heads' safety signal.
