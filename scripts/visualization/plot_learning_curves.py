@@ -84,13 +84,34 @@ def family(ax, curves, color, label, chosen=None):
         ax.plot(xs, mean, color=color, linewidth=2.2, label=label)
 
 
+def seed_legend(ax, loc="lower right"):
+    """family colours + what thin and bold lines mean"""
+    h = [plt.Line2D([], [], color=AUX, linewidth=2.2), plt.Line2D([], [], color=HEADS, linewidth=2.2),
+         plt.Line2D([], [], color="0.55", linewidth=1.0, alpha=0.6), plt.Line2D([], [], color="0.25", linewidth=2.2),
+         plt.Line2D([], [], color="0.4", marker="o", linestyle="", markeredgecolor="white")]
+    ax.legend(h, ["with auxiliary losses", "without auxiliary losses", "thin: each of 4 seeds",
+                  "bold: mean of the 4 seeds", "dot: evaluated epoch"], fontsize=7.5, frameon=False, loc=loc)
+
+
 def stage1(out):
     rows = history("p1d_total")
     keys = [("stabilize/val/ade_loss_epoch", "ADE (m)"), ("stabilize/val/fde_loss_epoch", "FDE (m)"),
             ("val/loss_terms/soft_ce_epoch", "imitation loss (soft CE)"),
             ("val/pdm_scores/total_mae_epoch", "score-prediction error (MAE)")]
-    fig, axes = plt.subplots(1, 4, figsize=(15, 3.4))
-    for ax, (k, t) in zip(axes, keys):
+    fig, axes = plt.subplots(1, 5, figsize=(19, 3.4))
+    ce = E / "checkpoint_eval"
+    ep, arg, head = [], [], []
+    for e in (7, 10, 12, 15, 19):
+        z = np.load(ce / f"p1d_total_ep{e:02d}_val.npz")
+        ep.append(e)
+        arg.append(float(np.nanmean(z["sel_score"])))
+        head.append(float(np.nanmean(z["head_all"])))
+    ax = axes[4]
+    ax.plot(ep, head, "o-", color=AUX, linewidth=2.0, label="heads selection")
+    ax.plot(ep, arg, "s--", color=AUX, linewidth=1.6, alpha=0.7, label="policy argmax")
+    style(ax, "val score (strict offline evaluation)")
+    ax.legend(fontsize=8, frameon=False, loc="center right")
+    for ax, (k, t) in zip(axes[:4], keys):
         x, y = series(rows, k)
         ax.plot(x, y, color=AUX, linewidth=2.0)
         m = np.isclose(x, 10)
@@ -117,7 +138,7 @@ def stage2(out):
                                      ("val/aux/lane_heading_acc_epoch", "aux: lane-direction accuracy")]):
         family(ax, [series(r, k) for r in ra], AUX, "with auxiliary losses", ch_aux)
         style(ax, t)
-    axes[0].legend(fontsize=8, frameon=False, loc="lower right")
+    seed_legend(axes[0])
     fig.tight_layout()
     fig.savefig(out / "stage2_phase3.png", dpi=170)
     plt.close(fig)
@@ -132,7 +153,7 @@ def stage3(out):
     family(ax, [series(history(e), k) for e in aux], AUX, "with auxiliary losses", ch_aux)
     family(ax, [series(history(e), k) for e in heads], HEADS, "without auxiliary losses", ch_heads)
     style(ax, "policy head: argmax (val score)")
-    ax.legend(fontsize=8, frameon=False, loc="lower right")
+    seed_legend(ax)
     fig.tight_layout()
     fig.savefig(out / "stage3_policy.png", dpi=170)
     plt.close(fig)
@@ -142,7 +163,7 @@ def stage4(out):
     aux = ["rl3_b0.005"] + [f"rl3_b0.005_pipe_s{s}" for s in (1, 2, 3)]
     heads = ["rl3_heads_b0.005"] + [f"rl3_heads_b0.005_pipe_s{s}" for s in (1, 2, 3)]
     keys = [("val/rl/argmax_epoch", "policy argmax (val score)"), ("val/rl/shortlist_256_epoch", "shortlist 256 (val score)"),
-            ("val/rl/expected_reward_epoch", "expected reward E_π[r]"), ("val/rl/kl_epoch", "KL to the start policy")]
+            ("val/rl/expected_reward_epoch", "expected reward E_π[r]")]
 
     def curves(exps, k):
         out_ = []
@@ -151,14 +172,22 @@ def stage4(out):
             out_.append((np.round(x / x.max() * 2.0, 2), y))  # 4 val passes per run -> 0.5, 1.0, 1.5, 2.0 epochs
         return out_
 
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.6))
+    fig, axes = plt.subplots(1, 3, figsize=(13, 3.6))
     for ax, (k, t) in zip(axes, keys):
         family(ax, curves(aux, k), AUX, "start: trained with auxiliary losses", [2.0] * 4)
         family(ax, curves(heads, k), HEADS, "start: trained without auxiliary losses", [2.0] * 4)
         style(ax, t)
-    axes[0].legend(fontsize=8, frameon=False, loc="lower right")
+    seed_legend(axes[0])
     fig.tight_layout()
     fig.savefig(out / "stage4_rl.png", dpi=170)
+    plt.close(fig)
+    fig, ax = plt.subplots(figsize=(5.2, 3.6))  # appendix: how far RL moves from the start policy
+    family(ax, curves(aux, "val/rl/kl_epoch"), AUX, "with auxiliary losses", [2.0] * 4)
+    family(ax, curves(heads, "val/rl/kl_epoch"), HEADS, "without auxiliary losses", [2.0] * 4)
+    style(ax, "KL to the start policy (nats)")
+    seed_legend(ax, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out / "stage4_rl_kl.png", dpi=170)
     plt.close(fig)
 
 
