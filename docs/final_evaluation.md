@@ -2262,8 +2262,23 @@ through its 8 logged poses.
     0.774, stage two 0.507). On navhard the soft mixture lies between argmax (0.370) and the hard shortlist (0.410), and
     the EC rule adds about 0.03 to either base (0.425 / 0.438). On navtest the order is reversed: mixture 0.894 >
     argmax 0.892 > shortlist 0.882. The best rule therefore depends on the benchmark: mixture + EC on navtest, shortlist
-    + EC on navhard. Figure: `exp/qualitative/selected3/main/24_rule_scatter_navtest_navhard.png`
-    (`scripts/visualization/plot_rule_scatter.py`; heads only = `p3_aux_ep05_score_heads`, 0.812 / 0.363, one model).
+    + EC on navhard.
+    The figure uses the 4 full-pipeline runs instead (rl3_b0.005 and rl3_b0.005_pipe_s1-3, the runs of the stage chart,
+    finding 70), so that the thesis shows one value per rule. Their navhard mixture was scored with each run's own start
+    heads (p3_aux_policy_s1_ep01 / s2_ep02 / s3_ep02; CPU jobs 15343993-95): 0.393 ± 0.003. Means ± SD over the 4 runs
+    (navtest v2 / navhard):
+
+    | Rule | 4 pipeline runs | 6 RL seeds of rl3_b0.005 |
+    |---|---|---|
+    | argmax | 0.891 ± 0.002 / 0.365 ± 0.008 | 0.892 / 0.370 |
+    | heads only (the 4 scorers: p3_aux ep 5, s1-3) | 0.812 ± 0.002 / 0.360 ± 0.004 | 0.812 / 0.363 (one model) |
+    | shortlist k 256 | 0.883 ± 0.001 / 0.405 ± 0.006 | 0.882 / 0.410 |
+    | mixture λ 10 | 0.894 ± 0.001 / 0.393 ± 0.003 | 0.894 / 0.397 |
+    | mixture + EC n 64 | 0.906 ± 0.002 / 0.419 ± 0.004 | 0.906 / 0.425 |
+    | shortlist + EC n 64 | 0.894 ± 0.001 / 0.435 ± 0.007 | 0.893 / 0.438 |
+
+    Same order of the rules on both benchmarks; every mean within 0.006. Figure:
+    `exp/qualitative/selected3/main/24_rule_scatter_navtest_navhard.png` (`scripts/visualization/plot_rule_scatter.py`).
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 

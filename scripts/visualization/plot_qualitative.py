@@ -379,6 +379,22 @@ def select_rules(scores, human, rules, rng, n_top, n_rand, log_of):
     return out
 
 
+# print layout, 6 in wide, margins 0.01: three map columns (wspace 0.04) are 1.91 in wide; three camera images
+# (wspace 0.02, sky cropped: 1920 x 745 px) are 1.93 x 0.75 in, with a 0.14 in label row above them
+MAP_W, CAM_H, CAM_LABEL_H = 1.91, 0.75, 0.14
+CAM_LABELS = {"cam_l0": "front left", "cam_f0": "front", "cam_r0": "front right"}
+
+
+def camera_row(fig, spec, prefix=""):
+    """front-left, front, front-right camera axes side by side in one gridspec cell, each with a small label
+    (prefix goes before the first label, e.g. the scene name)"""
+    sub = spec.subgridspec(1, 3, wspace=0.02)
+    axes = [fig.add_subplot(sub[0, j]) for j in range(3)]
+    for j, (ax, lab) in enumerate(zip(axes, CAM_LABELS.values())):
+        ax.set_title(prefix + lab if j == 0 else lab, fontsize=6.5, pad=1.5, color="#333333")
+    return axes
+
+
 def three_cameras(axes, frame, trajs, dotted=None, cams=("cam_l0", "cam_f0", "cam_r0")):
     """Front-left, front, front-right cameras with the trajectories projected (each where that camera sees it) and
     their end points as stars; dotted: {label: (traj, colour)} drawn dotted (e.g. the plan of t - 0.5 s)."""
@@ -394,9 +410,8 @@ def three_cameras(axes, frame, trajs, dotted=None, cams=("cam_l0", "cam_f0", "ca
                 ax.plot(uv[keep, 0], uv[keep, 1], color=colour, linestyle=":", linewidth=2.6, zorder=30)
             uv, keep = project(cam, traj[-1:, :2], z)
             if keep[0] and 0 < uv[0, 0] < w and h * 0.3 < uv[0, 1] < h:
-                ax.plot(uv[0, 0], uv[0, 1], marker="*", markersize=13, color=colour if ls == "-" else "white",
+                ax.plot(uv[0, 0], uv[0, 1], marker="*", markersize=8, color=colour if ls == "-" else "white",
                         markeredgecolor="white" if ls == "-" else colour, markeredgewidth=0.9, zorder=40)
-        ax.set_title({"cam_l0": "front left", "cam_f0": "front", "cam_r0": "front right"}[name], fontsize=8)
 
 
 def run_rules(args):
@@ -428,23 +443,23 @@ def run_rules(args):
             tr = {k: tr[k] for k in RULE5}
             hum = scene.get_future_trajectory().poses
             lim = bev_extent({"human": hum, **tr})
-            fig = plt.figure(figsize=(PRINT_W, 7.0))
-            gs = fig.add_gridspec(4, 3, height_ratios=[0.85, 1.0, 1.0, 0.36], hspace=0.30, wspace=0.04)
-            cam = fig.add_subplot(gs[0, :].subgridspec(1, 3, width_ratios=[0.12, 0.76, 0.12])[0, 1])
-            three_cameras([cam], frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]}, cams=("cam_f0",))
-            cam.set_title("")
+            # inches: camera labels, cameras, title, maps, title, maps, gap, legend
+            rows = [CAM_LABEL_H, CAM_H, 0.40, MAP_W, 0.40, MAP_W, 0.06, 0.62]
+            fig = plt.figure(figsize=(PRINT_W, sum(rows) / 0.98))
+            gs = fig.add_gridspec(len(rows), 3, height_ratios=rows, hspace=0, wspace=0.04)
+            three_cameras(camera_row(fig, gs[1, :]), frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]})
             order = ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64", "shortlist + EC n64"]
             for j, k in enumerate(order):
-                ax = fig.add_subplot(gs[1 + j // 3, j % 3])
+                ax = fig.add_subplot(gs[3 + 2 * (j // 3), j % 3])
                 draw_bev(ax, scene, {"human": hum, k: tr[k]}, None, lim=lim)
                 draw_future_agents(ax, scene)
                 ax.set_title(f"{SHORT[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}",
                              color="#b00000" if scores[k].loc[tok, "score"] < 0.5 else "black")
-            lax = fig.add_subplot(gs[3, :])
+            lax = fig.add_subplot(gs[7, :])
             lax.axis("off")
             lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + map_legend_handles(),
                        [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"] +
-                       [h.get_label() for h in map_legend_handles()], loc="center", ncol=4, frameon=False,
+                       [h.get_label() for h in map_legend_handles()], loc="upper center", ncol=4, frameon=False,
                        handlelength=1.6, columnspacing=1.0)
             fig.subplots_adjust(left=0.01, right=0.99, top=0.985, bottom=0.005)
             f = out_root / cat / f"{i:02d}_{tok}.png"

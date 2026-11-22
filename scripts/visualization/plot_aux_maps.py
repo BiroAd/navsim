@@ -42,9 +42,9 @@ def loader_for(tokens, logs, sensor_path):
     sf = instantiate(cfg)
     sf.tokens = list(tokens)
     sf.log_names = sorted(set(logs))
-    cams = dict(cam_l0=False, cam_l1=False, cam_l2=False, cam_r0=False, cam_r1=False, cam_r2=False, cam_b0=False)
+    cams = dict(cam_l1=False, cam_l2=False, cam_r1=False, cam_r2=False, cam_b0=False)
     return SceneLoader(D / "navsim_logs/trainval", Path(sensor_path), sf,
-                       sensor_config=SensorConfig(cam_f0=[3], lidar_pc=False, **cams))
+                       sensor_config=SensorConfig(cam_f0=[3], cam_l0=[3], cam_r0=[3], lidar_pc=False, **cams))
 
 
 def bev_ax(ax, title):
@@ -78,8 +78,8 @@ def show_head(ax, m, title, mask=None):
     return im
 
 
-def camera(ax, scene):
-    img = scene.frames[3].cameras.cam_f0.image
+def camera(ax, scene, name="cam_f0"):
+    img = getattr(scene.frames[3].cameras, name).image
     ax.imshow(img)
     h = img.shape[0]
     ax.set_ylim(h * 0.99, h * 0.25)
@@ -146,10 +146,13 @@ def main():
             scene = loader.get_scene_from_token(tokens[r])
             sources = [("ground truth", None)] + list(zip(labels, [m, *comp]))
             n = len(sources)
-            fig = plt.figure(figsize=(4.8, 6.7))
-            gs = fig.add_gridspec(5, n, height_ratios=[0.80, 1.25, 1.25, 1.25, 0.50], hspace=0.22, wspace=0.03)
-            cam = fig.add_subplot(gs[0, :])
-            camera(cam, scene)
+            fig = plt.figure(figsize=(4.8, 6.5))  # camera row taller than the images: room for the column titles
+            gs = fig.add_gridspec(5, n, height_ratios=[0.63, 1.25, 1.25, 1.25, 0.50], hspace=0.22, wspace=0.03)
+            sub = gs[0, :].subgridspec(1, 3, wspace=0.02)  # front-left, front, front-right cameras
+            for j, (name, lab) in enumerate([("cam_l0", "front left"), ("cam_f0", "front"), ("cam_r0", "front right")]):
+                cax = fig.add_subplot(sub[0, j])
+                camera(cax, scene, name)
+                cax.set_title(lab, fontsize=6, pad=1.5, color="#333333")
             for c, (lab, mm) in enumerate(sources):
                 axs = [fig.add_subplot(gs[1 + k, c]) for k in range(3)]
                 if mm is None:
@@ -173,7 +176,7 @@ def main():
             cb = fig.colorbar(im, cax=fig.add_axes([0.58, 0.06, 0.38, 0.012]), orientation="horizontal")
             cb.set_label("lane direction relative to ego heading (deg)", fontsize=6.5)
             cb.ax.tick_params(labelsize=6)
-            fig.subplots_adjust(left=0.07, right=0.99, top=0.99, bottom=0.005)
+            fig.subplots_adjust(left=0.07, right=0.99, top=0.975, bottom=0.005)
             f = args.out_dir / f"backbones_scene{r:02d}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)

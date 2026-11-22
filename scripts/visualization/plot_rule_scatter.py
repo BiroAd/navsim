@@ -1,7 +1,8 @@
-"""navtest vs navhard for the selection rules of the RL model (rl3_b0.005, 6 seeds, own scorer p3_aux_policy_ep03):
-x = navtest v2 EPDMS, y = navhard EPDMS, one point per rule (mean over the 6 seeds) with error bars = SD over the
-seeds. "Heads only" is the start model's heads (the fixed scorer, p3_aux ep 5 score_heads): one model, no seed spread,
-drawn hollow. Colours as in the trajectory figures. Latest timestamped CSV per output folder.
+"""navtest vs navhard for the selection rules of the RL model over the 4 full-pipeline runs (the runs of the stage chart,
+plot_stage_scores.py: rl3_b0.005 and rl3_b0.005_pipe_s1-3, each from its own stage 2 / stage 3 seed and scored with
+its own start model's heads): x = navtest v2 EPDMS, y = navhard EPDMS, one point per rule (mean over the 4 runs) with
+error bars = SD over the runs. "Heads only" = the 4 runs' scorers alone (stage 2 heads selection, p3_aux ep 5 and
+p3_aux_s1-3), drawn hollow. Colours as in the trajectory figures. Latest timestamped CSV per output folder.
   python scripts/visualization/plot_rule_scatter.py --out <png>
 """
 import argparse
@@ -18,7 +19,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 E = Path(os.environ["NAVSIM_EXP_ROOT"])
-SEEDS = ["rl3_b0.005_ep01"] + [f"rl3_b0.005_s{s}_ep01" for s in range(1, 6)]
+SEEDS = ["rl3_b0.005_ep01"] + [f"rl3_b0.005_pipe_s{s}_ep01" for s in (1, 2, 3)]
 RULES = [  # label, navtest suffix, navhard suffix, colour (plot_qualitative STYLE)
     ("Policy (argmax)", "argmax", "argmax", "#1f77b4"),
     ("Shortlist (k = 256)", "shortlist_k256", "shortlist_k256", "#2ca02c"),
@@ -26,7 +27,7 @@ RULES = [  # label, navtest suffix, navhard suffix, colour (plot_qualitative STY
     ("Mixture + consistency", "own_ecseq_mix10_n64_argmax", "own_ec_mix10_n64_argmax", "#d62728"),
     ("Shortlist + consistency", "own_ecseq_short256_n64_argmax", "own_ec_short256_n64_argmax", "#006d2c"),
 ]
-HEADS = ("Heads only (scorer)", "p3_aux_ep05_score_heads", "#ff7f0e")
+HEADS = ("Heads only (scorer)", ["p3_aux_ep05", "p3_aux_s1_ep06", "p3_aux_s2_ep05", "p3_aux_s3_ep06"], "#ff7f0e")
 
 
 def latest(folder):
@@ -65,15 +66,17 @@ def main():
                     label=lab)
         print(f"{lab}: navtest {np.nanmean(x):.4f} ± {np.nanstd(x, ddof=1):.4f}, navhard {np.nanmean(y):.4f} ± "
               f"{np.nanstd(y, ddof=1):.4f} (n {np.sum(~np.isnan(y))})")
-    hx, hy = navtest(HEADS[1]), navhard(HEADS[1])
-    ax.plot(hx, hy, marker="o", markersize=5, color="white", markeredgecolor=HEADS[2], markeredgewidth=1.3, linestyle="",
-            label=HEADS[0])
+    hxs = np.array([navtest(f"{h}_score_heads") for h in HEADS[1]])
+    hys = np.array([navhard(f"{h}_score_heads") for h in HEADS[1]])
+    hx, hy = hxs.mean(), hys.mean()
+    ax.errorbar(hx, hy, xerr=hxs.std(ddof=1), yerr=hys.std(ddof=1), marker="o", markersize=5, color=HEADS[2],
+                markerfacecolor="white", markeredgewidth=1.3, capsize=2, elinewidth=0.9, linestyle="", label=HEADS[0])
     h, l = ax.get_legend_handles_labels()
     names = [RULES[0][0], HEADS[0]] + [r[0] for r in RULES[1:]]  # rule order of the trajectory figures
     order = [l.index(n) for n in names]
     ax.legend([h[i] for i in order], names, loc="upper left", fontsize=7, frameon=False, handletextpad=0.4,
               borderaxespad=0.2)  # a legend, not point labels: labels would cross the error bars
-    print(f"{HEADS[0]}: navtest {hx:.4f}, navhard {hy:.4f}")
+    print(f"{HEADS[0]}: navtest {hx:.4f} ± {hxs.std(ddof=1):.4f}, navhard {hy:.4f} ± {hys.std(ddof=1):.4f}")
     ax.set_xlabel("navtest v2 EPDMS", fontsize=8, color="#52514e")
     ax.set_ylabel("navhard EPDMS", fontsize=8, color="#52514e")
     ax.grid(True, color="#e6e5e1", linewidth=0.6)

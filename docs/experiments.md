@@ -1457,7 +1457,11 @@ one official row per training stage.
   - The aux maps use NAVSIM's colours.
   - The stage chart uses numbered ticks plus a stage line.
   - New: `plot_rule_scatter.py`, navtest vs navhard per rule over the 6 seeds.
-  - It needed the navhard mixture λ 10 on all seeds: cpu jobs 15341975-80, finding 78.
+  - It needed the navhard mixture λ 10 on all seeds: cpu jobs 15341975-80, finding 78. The figure now uses the 4
+    full-pipeline runs (as the stage chart); their navhard mixture: cpu jobs 15343993-95 (32-37 min each).
+  - Camera strip (front left, front, front right, labelled, plans projected in all three) in the rules, stage, aux
+    and navhard figures (navhard: one strip per scene, stacked; the synthetic scenes have rendered side cameras).
+    Render jobs 15343997 (rules), 15343998 (stages), 15343999 (navhard), 15344003 (aux).
 
   Render jobs: 15342005 (rules / consecutive), 15341982 (curves), 15342115 (stages), 15342017 (aux), 15342522 (navhard)
   and 15342532 (DDC). Curated set for the thesis: `exp/qualitative/selected3/{main,appendix}/`, copied by

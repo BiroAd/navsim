@@ -158,18 +158,22 @@ def main():
                 ("synthetic follow-up, failed", "stage_two")]
         if args.mode == "rescue":
             cols = [("original scene (stage one)", "stage_one"), ("synthetic follow-up (stage two)", "stage_two")]
-        # rows in inches (2 columns of 2.88 in): camera (16:6 crop), title lines, square map, gap, legend
-        rows = [1.11, 0.62, 2.88, 0.06, 0.62]
+        # rows in inches: one full-width camera strip (front left, front, front right) per scene, stacked; then the
+        # title lines, the square maps side by side, a gap and the legend
+        n = len(cols)
+        map_w = (0.98 * pq.PRINT_W) / (n + 0.04 * (n - 1))
+        rows = [pq.CAM_LABEL_H, pq.CAM_H] * n + [0.62, map_w, 0.06, 0.62]
         fig = plt.figure(figsize=(pq.PRINT_W, sum(rows) / 0.985))
-        gs = fig.add_gridspec(5, len(cols), height_ratios=rows, hspace=0, wspace=0.04)
+        gs = fig.add_gridspec(len(rows), n, height_ratios=rows, hspace=0, wspace=0.04)
+        r0 = 2 * n  # first row after the camera strips
         for c, (tok, (head, stage)) in enumerate(zip(toks, cols)):
             scene = loader.get_scene_from_token(tok)
             frame = scene.frames[scene.scene_metadata.num_history_frames - 1]
             pl = plans(tok)
             pq.STYLE.update({"argmax": (COLORS["argmax"], "-", 5.2, 26), "shortlist k256": (COLORS["shortlist k256"], "-", 3.4, 27),
                              "shortlist + EC n64": (COLORS["shortlist + EC n64"], "-", 1.6, 28)})
-            cam_ax = fig.add_subplot(gs[0, c])
-            ax = fig.add_subplot(gs[2, c])
+            cam_axes = pq.camera_row(fig, gs[1 + 2 * c, :], prefix=head.split(" (")[0] + ": ")
+            ax = fig.add_subplot(gs[r0 + 1, c])
             trajs = dict(pl)
             hum = None
             if stage == "stage_one":
@@ -181,7 +185,7 @@ def main():
             pq.draw_bev(ax, scene, trajs, None, lim=pq.bev_extent(trajs))
             if stage == "stage_one":  # synthetic scenes have no future frames
                 pq.draw_future_agents(ax, scene)
-            pq.draw_camera(cam_ax, frame, {k: v for k, v in trajs.items() if k in ("human", "shortlist + EC n64")})
+            pq.three_cameras(cam_axes, frame, {k: v for k, v in trajs.items() if k in ("human", "shortlist + EC n64")})
             same = {k: [j for j in list(pl)[: list(pl).index(k)] if np.abs(pl[j] - pl[k]).max() < 1e-3] for k in pl}
             lines = [f"{RULES[k]}: {fmt(scores[k].loc[tok], stage)}" for k in RULES]  # identical plans: nested bands
             ax.set_title(f"{head}\n" + "\n".join(lines), fontsize=6.8)
@@ -189,7 +193,7 @@ def main():
                   [plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + pq.map_legend_handles()
         labels = list(RULES.values()) + ["human (logged; original scene only)"] + \
                  [h.get_label() for h in pq.map_legend_handles()]
-        lax = fig.add_subplot(gs[4, :])
+        lax = fig.add_subplot(gs[r0 + 3, :])
         lax.axis("off")
         lax.legend(handles, labels, loc="upper center", ncol=4, frameon=False, handlelength=1.6, columnspacing=1.0)
         fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.005)
