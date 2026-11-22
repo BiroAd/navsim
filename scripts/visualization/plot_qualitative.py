@@ -556,8 +556,8 @@ def run_rules(args):
             lax = fig.add_subplot(gs[7, :])
             lax.axis("off")
             lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] +
-                       map_legend_handles(footprint=True), [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"] +
-                       [h.get_label() for h in map_legend_handles(footprint=True)], loc="upper center", ncol=4, frameon=False,
+                       map_legend_handles(footprint=bool(snaps)), [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"] +
+                       [h.get_label() for h in map_legend_handles(footprint=bool(snaps))], loc="upper center", ncol=4, frameon=False,
                        handlelength=1.6, columnspacing=1.0)
             fig.subplots_adjust(left=0.01, right=0.99, top=0.985, bottom=0.005)
             f = out_root / cat / f"{i:02d}_{tok}.png"
