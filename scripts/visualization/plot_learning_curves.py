@@ -1,7 +1,6 @@
 """Learning curves of the vision_llm_lora training stages from the W&B run logs (offline `.wandb` files in each run
 folder): validation metrics on navtrain val per validation pass, one figure per stage, one measure per panel (small
-multiples, no dual axes). Seeds: thin lines; mean over seeds: bold; dot: the epoch the official evaluation uses (best
-val head_all / val argmax by the offline evaluation, final epoch for RL-3).
+multiples, no dual axes). Seeds: thin lines; mean over seeds: bold (explained in the figure captions, not in the images).
   stage 1  phase 1 (p1d_total): val ADE, FDE, imitation loss (soft CE), score-prediction error (total MAE)
   stage 2  phase 3, aux vs heads (4 seeds each): val head score, val argmax score; aux runs: BEV mIoU, drivable IoU,
            lane-direction accuracy
@@ -76,9 +75,6 @@ def family(ax, curves, color, label, chosen=None):
     xs = sorted(set.intersection(*[set(np.round(x, 3)) for x, _ in curves])) if curves else []
     for i, (x, y) in enumerate(curves):
         ax.plot(x, y, color=color, linewidth=1.0, alpha=0.45)
-        if chosen is not None and chosen[i] is not None:
-            m = np.isclose(x, chosen[i])
-            ax.plot(x[m], y[m], "o", color=color, markersize=6, markeredgecolor="white", markeredgewidth=1.2, zorder=5)
     if xs:
         mean = [np.mean([y[np.isclose(x, v)][0] for x, y in curves]) for v in xs]
         ax.plot(xs, mean, color=color, linewidth=2.2, label=label)
@@ -86,11 +82,8 @@ def family(ax, curves, color, label, chosen=None):
 
 def seed_legend(ax, loc="lower right"):
     """family colours + what thin and bold lines mean"""
-    h = [plt.Line2D([], [], color=AUX, linewidth=2.2), plt.Line2D([], [], color=HEADS, linewidth=2.2),
-         plt.Line2D([], [], color="0.55", linewidth=1.0, alpha=0.6), plt.Line2D([], [], color="0.25", linewidth=2.2),
-         plt.Line2D([], [], color="0.4", marker="o", linestyle="", markeredgecolor="white")]
-    ax.legend(h, ["with auxiliary losses", "without auxiliary losses", "thin: each of 4 seeds",
-                  "bold: mean of the 4 seeds", "dot: evaluated epoch"], fontsize=7.5, frameon=False, loc=loc)
+    h = [plt.Line2D([], [], color=AUX, linewidth=2.2), plt.Line2D([], [], color=HEADS, linewidth=2.2)]
+    ax.legend(h, ["with auxiliary losses", "without auxiliary losses"], fontsize=8, frameon=False, loc=loc)
 
 
 def stage1(out):
@@ -114,8 +107,6 @@ def stage1(out):
     for ax, (k, t) in zip(axes[:4], keys):
         x, y = series(rows, k)
         ax.plot(x, y, color=AUX, linewidth=2.0)
-        m = np.isclose(x, 10)
-        ax.plot(x[m], y[m], "o", color=AUX, markersize=6, markeredgecolor="white", markeredgewidth=1.2)
         style(ax, t)
     fig.tight_layout()
     fig.savefig(out / "stage1_phase1.png", dpi=170)

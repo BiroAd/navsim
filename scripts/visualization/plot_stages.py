@@ -26,12 +26,12 @@ from navsim.agents.vision_llm_lora.vision_llm_lora_agent import select_trajector
 from navsim.agents.vision_llm_lora.vision_llm_lora_precomputed_agent import load_predictions  # noqa: E402
 
 STAGES = [  # key, title, prediction folder, selection, per-scene score folder, colour
-    ("s1_policy", "Stage 1: phase 1, policy", "p1d_total_ep10", "argmax", "p1d_total_ep10_argmax", "#8c564b"),
-    ("s1_heads", "Stage 1: phase 1, heads", "p1d_total_ep10", "score_heads", "p1d_total_ep10_score_heads", "#e377c2"),
-    ("s2", "Stage 2: phase 3 + aux, heads", "p3_aux_ep05", "score_heads", "p3_aux_ep05_score_heads", "#ff7f0e"),
-    ("s3", "Stage 3: policy head, shortlist", "p3_aux_policy_ep03", "shortlist", "p3_aux_policy_ep03_shortlist_k256",
+    ("s1_policy", "Stage 1 (frozen backbone): policy", "p1d_total_ep10", "argmax", "p1d_total_ep10_argmax", "#8c564b"),
+    ("s1_heads", "Stage 1 (frozen backbone): heads", "p1d_total_ep10", "score_heads", "p1d_total_ep10_score_heads", "#e377c2"),
+    ("s2", "Stage 2 (LoRA fine-tuning): heads", "p3_aux_ep05", "score_heads", "p3_aux_ep05_score_heads", "#ff7f0e"),
+    ("s3", "Stage 3 (policy head): shortlist", "p3_aux_policy_ep03", "shortlist", "p3_aux_policy_ep03_shortlist_k256",
      "#2ca02c"),
-    ("s4", "Stage 4: RL, mixture + consistency", None, None, "rl3_b0.005_ep01_own_ecseq_mix10_n64_argmax", "#d62728"),
+    ("s4", "Stage 4 (RL): mixture + consistency", None, None, "rl3_b0.005_ep01_own_ecseq_mix10_n64_argmax", "#d62728"),
 ]
 
 

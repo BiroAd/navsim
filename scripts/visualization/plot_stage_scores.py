@@ -66,7 +66,6 @@ RULE = {2: {"v2": lambda n: v2(f"{n}_score_heads"), "v1": lambda n: v1(f"{n}_sco
             "hard": lambda n: hard(f"{n}_shortlist_k256")},
         4: {"v2": lambda n: v2(f"{n}_own_ecseq_mix10_n64_argmax"), "v1": lambda n: v1(f"{n}_mixture_v1_lam10"),
             "hard": lambda n: hard(f"{n}_own_ec_short256_n64_argmax")}}
-IMIT = {"v2": v2("p3_imitation_ep07_argmax"), "v1": v1("p3_imitation_ep07_argmax"), "hard": hard("p3_imitation_ep07_argmax")}
 
 
 def main():
@@ -87,9 +86,8 @@ def main():
             x = np.array([1, 2, 3, 4]) + np.r_[0, [dx] * 3]
             ax.errorbar(x, m, yerr=sd, color=col, linewidth=2.0, marker="o", markersize=6, capsize=3,
                         markeredgecolor="white", label=lab)
-        ax.plot([2], [IMIT[b]], marker="D", markersize=7, color="white", markeredgecolor=MUTED, markeredgewidth=1.5,
-                linestyle="", label="imitation only (phase 3, same start)")
-        ax.set_xticks([1, 2, 3, 4], ["1\nphase 1", "2\nphase 3", "3\npolicy head", "4\nRL"], fontsize=8.5)
+        ax.set_xticks([1, 2, 3, 4], ["Stage 1\nscore heads\n(frozen backbone)", "Stage 2\nLoRA fine-tuning",
+                                     "Stage 3\npolicy head", "Stage 4\nRL fine-tuning"], fontsize=8.5)
         ax.set_title(title, fontsize=10, color=INK, loc="left")
         ax.grid(True, axis="y", color="#e6e5e1", linewidth=0.6)
         ax.set_axisbelow(True)
@@ -101,7 +99,7 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=170)
     print(args.out)
-    print(f"stage 1: {S1}; imitation: {IMIT}")
+    print(f"stage 1: {S1}")
     for r in rows:
         print(f"{r[0]:4s} {r[1]:5s} stage {r[2]}: {r[3]:.4f} ± {r[4]:.4f}")
 
