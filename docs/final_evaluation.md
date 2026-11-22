@@ -971,6 +971,7 @@ this batch completed (27 after a resubmission, finding 58). `exp/rl3_logs/collec
 | navtest v1 (v1 comfort) **mixture_v1 λ 10** | **0.9169** | 0.0010 | 0.9151-0.9178 | 0.9178 |
 | navhard argmax | 0.370 | 0.010 | 0.355-0.383 | 0.365 |
 | navhard shortlist k 256 (stage one 0.763 ± 0.005, two 0.529 ± 0.011) | 0.410 | 0.009 | 0.397-0.420 | 0.412 |
+| navhard mixture λ 10 (stage one 0.774 ± 0.005, two 0.507 ± 0.015; added 2026-11-22) | 0.397 | 0.013 | 0.381-0.416 | 0.391 |
 | navhard EC rule, argmax base n 16 / n 64 | 0.396 / 0.402 | 0.011 / 0.011 | 0.377-0.411 | 0.391 / 0.393 |
 | navhard EC rule, shortlist base n 16 / **n 64** | 0.433 / **0.438** | 0.011 / 0.011 | 0.418-0.455 | 0.434 / 0.434 |
 | navhard EC rule, mixture base n 16 / n 64 | 0.419 / 0.425 | 0.014 / 0.012 | 0.395-0.440 | 0.417 / 0.422 |
@@ -996,6 +997,8 @@ own-scorer jobs; best seed in bold):
 | navhard argmax | 0.365 | 0.378 | 0.375 | 0.368 | **0.383** | 0.355 |
 | navhard shortlist k 256 | 0.412 | **0.420** | 0.417 | 0.410 | 0.397 | 0.404 |
 | (stage one / stage two) | 0.764 / 0.533 | 0.773 / 0.537 | 0.758 / 0.537 | 0.761 / 0.534 | 0.762 / 0.510 | 0.762 / 0.523 |
+| navhard mixture λ 10 | 0.391 | **0.416** | 0.408 | 0.393 | 0.392 | 0.381 |
+| (stage one / stage two) | 0.770 / 0.499 | 0.776 / 0.527 | 0.768 / 0.522 | 0.780 / 0.504 | 0.775 / 0.501 | 0.773 / 0.487 |
 | navhard EC rule, argmax base n 16 | 0.391 | 0.403 | 0.401 | 0.396 | **0.407** | 0.377 |
 | navhard EC rule, argmax base n 64 | 0.393 | 0.410 | **0.411** | 0.401 | 0.410 | 0.385 |
 | navhard EC rule, shortlist base n 16 | 0.434 | **0.449** | 0.439 | 0.428 | 0.418 | 0.429 |
@@ -2252,6 +2255,15 @@ through its 8 logged poses.
       ground height follow the painted lanes; the stored distortion coefficients do not apply to these images
       (they distort the projection). Camera overlays are geometrically right but show the near field (first 3-5 m) and
       differences between plans poorly, so the BEV is the comparison view.
+
+78. **navhard mixture λ 10 over the 6 seeds; the rule scatter (2026-11-22).** The navhard mixture had been scored
+    only for seed 0 with the control scorer (0.395). With the own heads (`p3_aux_policy_ep03`), all 6 rl3_b0.005 seeds
+    (CPU jobs 15341975-80, after 15341944-49 failed on a missing `python`): **0.397 ± 0.013** (0.381-0.416; stage one
+    0.774, stage two 0.507). On navhard the soft mixture lies between argmax (0.370) and the hard shortlist (0.410), and
+    the EC rule adds about 0.03 to either base (0.425 / 0.438). On navtest the order is reversed: mixture 0.894 >
+    argmax 0.892 > shortlist 0.882. The best rule therefore depends on the benchmark: mixture + EC on navtest, shortlist
+    + EC on navhard. Figure: `exp/qualitative/selected3/main/24_rule_scatter_navtest_navhard.png`
+    (`scripts/visualization/plot_rule_scatter.py`; heads only = `p3_aux_ep05_score_heads`, 0.812 / 0.363, one model).
 
 ## Results (re-evaluation 2026-11-08: split pipeline, batch 64, bf16)
 

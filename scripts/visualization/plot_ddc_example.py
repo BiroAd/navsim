@@ -83,7 +83,7 @@ def main():
     res = {"human (logged)": (hum, "black", ddc(hum, pose, route, inter, 0.1)),
            "planner (mixture + consistency)": (plan[:, :2], "#d62728", ddc(plan[:, :2], pose, route, inter, 0.1))}
     trajs = {"human": hum8, "mixture + EC n64": plan}
-    fig, ax = plt.subplots(figsize=(8.5, 8.5))
+    fig, ax = plt.subplots(figsize=(4.8, 5.1))  # print: 0.8 x text width (150 mm)
     lim = pq.bev_extent(trajs, margin=10)
     pq.draw_bev(ax, scene, trajs, None, lim=lim)
     for poly in getattr(route, "geoms", [route]):
@@ -91,20 +91,20 @@ def main():
         ax.fill(xy[:, 1], xy[:, 0], color="#4c9be8", alpha=0.18, zorder=3, lw=0)
     for name, (xy, col, (onc, worst, val)) in res.items():
         pts = np.concatenate([[[0.0, 0.0]], xy])
-        ax.scatter(pts[onc, 1], pts[onc, 0], s=26, c="#e7298a", zorder=40, edgecolors="white", linewidths=0.5)
+        ax.scatter(pts[onc, 1], pts[onc, 0], s=12, c="#e7298a", zorder=40, edgecolors="white", linewidths=0.5)
     off = {"human (logged)": pq.per_scene("human_agent_non_reactive", suffix="").loc[args.token],
            "planner (mixture + consistency)": pq.per_scene(f"{args.model}_own_ecseq_mix10_n64_argmax").loc[args.token]}
-    lines = [f"{n}: official DDC {off[n]['driving_direction_compliance']:.1f}, EPDMS {off[n]['score']:.2f} "
-             f"(reconstructed: {w:.1f} m off-route within 1 s)" for n, (_, _, (_, w, v)) in res.items()]
-    ax.set_title("\n".join(lines), fontsize=10)
+    lines = [f"{n.split(' (')[0]}: official DDC {off[n]['driving_direction_compliance']:.1f}, EPDMS {off[n]['score']:.2f}"
+             f" (reconstructed: {w:.1f} m off-route in 1 s)" for n, (_, _, (_, w, v)) in res.items()]
+    ax.set_title("\n".join(lines), fontsize=6.8)
     ax.legend(handles=[Patch(color="#4c9be8", alpha=0.3, label="route lanes (on-route drivable area)"),
                        plt.Line2D([], [], color="black", linestyle="--", label="human (logged)"),
                        plt.Line2D([], [], color="#d62728", label="planner (mixture + consistency)"),
                        plt.Line2D([], [], color="#e7298a", marker="o", linestyle="", label="pose outside the route lanes (counts for DDC)")],
-              loc="lower left", fontsize=9, framealpha=0.9)
+              loc="lower left", fontsize=6.5, framealpha=0.9)
     fig.tight_layout()
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.out, dpi=150)
+    fig.savefig(args.out, dpi=300)
     print(args.out, lines)
 
 

@@ -72,7 +72,7 @@ def main():
                    help="rescue: original + a synthetic follow-up where argmax <= 0.3 and the shortlist >= 0.8; "
                         "mixed: original + one handled and one failed synthetic follow-up (best rule)")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--dpi", type=int, default=300)
     args = p.parse_args()
     names = {"argmax": f"{args.model}_argmax", "shortlist k256": f"{args.model}_shortlist_k256",
              "shortlist + EC n64": f"{args.model}_own_ec_short256_n64_argmax"}
@@ -158,8 +158,10 @@ def main():
                 ("synthetic follow-up, failed", "stage_two")]
         if args.mode == "rescue":
             cols = [("original scene (stage one)", "stage_one"), ("synthetic follow-up (stage two)", "stage_two")]
-        fig = plt.figure(figsize=(6.2 * len(cols), 10.5))
-        gs = fig.add_gridspec(2, len(cols), height_ratios=[0.5, 1.0], hspace=0.10, wspace=0.04)
+        # rows in inches (2 columns of 2.88 in): camera (16:6 crop), title lines, square map, gap, legend
+        rows = [1.11, 0.62, 2.88, 0.06, 0.62]
+        fig = plt.figure(figsize=(pq.PRINT_W, sum(rows) / 0.985))
+        gs = fig.add_gridspec(5, len(cols), height_ratios=rows, hspace=0, wspace=0.04)
         for c, (tok, (head, stage)) in enumerate(zip(toks, cols)):
             scene = loader.get_scene_from_token(tok)
             frame = scene.frames[scene.scene_metadata.num_history_frames - 1]
@@ -167,7 +169,7 @@ def main():
             pq.STYLE.update({"argmax": (COLORS["argmax"], "-", 5.2, 26), "shortlist k256": (COLORS["shortlist k256"], "-", 3.4, 27),
                              "shortlist + EC n64": (COLORS["shortlist + EC n64"], "-", 1.6, 28)})
             cam_ax = fig.add_subplot(gs[0, c])
-            ax = fig.add_subplot(gs[1, c])
+            ax = fig.add_subplot(gs[2, c])
             trajs = dict(pl)
             hum = None
             if stage == "stage_one":
@@ -177,17 +179,20 @@ def main():
             if hum is not None and len(hum) == 8:
                 trajs = {"human": hum, **pl}
             pq.draw_bev(ax, scene, trajs, None, lim=pq.bev_extent(trajs))
+            if stage == "stage_one":  # synthetic scenes have no future frames
+                pq.draw_future_agents(ax, scene)
             pq.draw_camera(cam_ax, frame, {k: v for k, v in trajs.items() if k in ("human", "shortlist + EC n64")})
             same = {k: [j for j in list(pl)[: list(pl).index(k)] if np.abs(pl[j] - pl[k]).max() < 1e-3] for k in pl}
-            lines = [f"{RULES[k]}: {fmt(scores[k].loc[tok], stage)}" + (f" (= {RULES[same[k][-1]]})" if same[k] else "")
-                     for k in RULES]
-            ax.set_title(f"{head}\n" + "\n".join(lines), fontsize=9.5)
-        handles = [plt.Line2D([], [], color=COLORS[k], linewidth=w) for k, w in zip(RULES, [5.2, 3.4, 1.6])] + \
-                  [plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8)]
-        fig.legend(handles, list(RULES.values()) + ["human (logged; original scenes only)"],
-                   loc="lower center",
-                   ncol=4, fontsize=10, frameon=False)
-        fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.05)
+            lines = [f"{RULES[k]}: {fmt(scores[k].loc[tok], stage)}" for k in RULES]  # identical plans: nested bands
+            ax.set_title(f"{head}\n" + "\n".join(lines), fontsize=6.8)
+        handles = [plt.Line2D([], [], color=COLORS[k], linewidth=w) for k, w in zip(RULES, [3.9, 2.55, 1.2])] + \
+                  [plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + pq.map_legend_handles()
+        labels = list(RULES.values()) + ["human (logged; original scene only)"] + \
+                 [h.get_label() for h in pq.map_legend_handles()]
+        lax = fig.add_subplot(gs[4, :])
+        lax.axis("off")
+        lax.legend(handles, labels, loc="upper center", ncol=4, frameon=False, handlelength=1.6, columnspacing=1.0)
+        fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.005)
         f = args.out_dir / f"{i:02d}_{toks[0]}.png"
         fig.savefig(f, dpi=args.dpi)
         plt.close(fig)

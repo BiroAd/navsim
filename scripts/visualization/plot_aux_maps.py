@@ -31,7 +31,7 @@ D = Path(os.environ["OPENSCENE_DATA_ROOT"])
 REPO = Path(__file__).resolve().parents[2]
 EXTENT = [32, -32, -16, 64]  # imshow (left, right, bottom, top) with origin="lower": forward up, left = +y
 NAMES = ["none", "road", "walkway", "lane centreline", "static object", "vehicle", "pedestrian"]
-COLORS = ["#ffffff", "#d9d9d9", "#d8cf9b", "#4d4d4d", "#ff7f0e", "#1f77b4", "#e377c2"]
+COLORS = ["#ffffff", "#D3D3D3", "#d4d19e", "#4d4d4d", "#edc948", "#699CDB", "#b07aa1"]  # NAVSIM BEV colours (config.py)
 SEM_CMAP = ListedColormap(COLORS)
 NO_LANE = 255
 BINS = 36
@@ -93,7 +93,7 @@ def main():
     p.add_argument("--labels", nargs="*", default=[], help="labels of --maps and each --compare")
     p.add_argument("--sensor-path", required=True)
     p.add_argument("--out-dir", type=Path, required=True)
-    p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--drift-scenes", type=int, nargs="*", default=[0], help="scene indices of the backbone figures")
     args = p.parse_args()
     m = np.load(args.maps)
@@ -139,17 +139,19 @@ def main():
         index.append(f"| `scenes/{f.name}` | {tok} | {log} |")
         print(f, flush=True)
     (args.out_dir / "index.md").write_text("\n".join(index) + "\n")
-    if comp:  # backbone comparison, one figure per --drift-scenes index: rows = ground truth and each backbone,
-        # columns = semantics, drivable area, lane direction; no model names or tokens (labels from --labels)
+    if comp:  # backbone comparison, one figure per --drift-scenes index, sized for 0.8 x the thesis text width:
+        # columns = ground truth and each backbone (--labels), rows = semantics, drivable area, lane direction
+        plt.rcParams.update({"font.size": 7.5, "axes.titlesize": 7.5, "legend.fontsize": 6.5})
         for r in args.drift_scenes:
             scene = loader.get_scene_from_token(tokens[r])
             sources = [("ground truth", None)] + list(zip(labels, [m, *comp]))
-            fig = plt.figure(figsize=(9.6, 3.0 + 2.9 * len(sources)))
-            gs = fig.add_gridspec(1 + len(sources), 3, height_ratios=[1.15] + [1.0] * len(sources), hspace=0.08,
-                                  wspace=0.03)
-            camera(fig.add_subplot(gs[0, :]), scene)
-            for row, (lab, mm) in enumerate(sources):
-                axs = [fig.add_subplot(gs[1 + row, c]) for c in range(3)]
+            n = len(sources)
+            fig = plt.figure(figsize=(4.8, 6.7))
+            gs = fig.add_gridspec(5, n, height_ratios=[0.80, 1.25, 1.25, 1.25, 0.50], hspace=0.22, wspace=0.03)
+            cam = fig.add_subplot(gs[0, :])
+            camera(cam, scene)
+            for c, (lab, mm) in enumerate(sources):
+                axs = [fig.add_subplot(gs[1 + k, c]) for k in range(3)]
                 if mm is None:
                     show_sem(axs[0], m["sem_target"][r], "")
                     show_drv(axs[1], m["drv_target"][r], m["drv_target"][r], "")
@@ -159,14 +161,19 @@ def main():
                     show_sem(axs[0], mm["sem_pred"][j], "")
                     show_drv(axs[1], mm["drv_prob"][j], m["drv_target"][r], "")
                     show_head(axs[2], mm["head_pred"][j], "", mask=mm["drv_prob"][j].astype(np.float32) > 0.5)
-                axs[0].set_ylabel(lab, fontsize=10)
-                if row == 0:
-                    for ax, t in zip(axs, ["BEV semantics", "drivable area", "lane travel direction"]):
-                        ax.set_title(t, fontsize=10)
-            cb = fig.colorbar(im, cax=fig.add_axes([0.66, 0.035, 0.30, 0.012]), orientation="horizontal")
-            cb.set_label("direction relative to ego heading (deg)", fontsize=8)
-            fig.legend(handles=legend, loc="lower left", ncol=3, fontsize=8, frameon=False, bbox_to_anchor=(0.01, 0.0))
-            fig.subplots_adjust(left=0.06, right=0.99, top=0.99, bottom=0.07)
+                axs[0].set_title(lab.replace(" auxiliary losses", "\naux losses").replace("after RL fine-tuning",
+                                 "after RL\nfine-tuning").replace("ground truth", "ground\ntruth"), fontsize=7, pad=2)
+                if c == 0:
+                    for ax, t in zip(axs, ["BEV semantics", "drivable area", "lane direction"]):
+                        ax.set_ylabel(t, fontsize=7.5)
+            lax = fig.add_subplot(gs[4, :])
+            lax.axis("off")
+            lax.legend(handles=legend, loc="upper left", ncol=2, frameon=False, bbox_to_anchor=(-0.02, 1.05),
+                       handlelength=1.4, columnspacing=0.8)
+            cb = fig.colorbar(im, cax=fig.add_axes([0.58, 0.06, 0.38, 0.012]), orientation="horizontal")
+            cb.set_label("lane direction relative to ego heading (deg)", fontsize=6.5)
+            cb.ax.tick_params(labelsize=6)
+            fig.subplots_adjust(left=0.07, right=0.99, top=0.99, bottom=0.005)
             f = args.out_dir / f"backbones_scene{r:02d}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)

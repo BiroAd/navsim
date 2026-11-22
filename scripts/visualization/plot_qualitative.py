@@ -40,6 +40,11 @@ from navsim.common.dataclasses import SensorConfig  # noqa: E402
 from navsim.common.dataloader import SceneLoader  # noqa: E402
 from navsim.visualization.bev import add_configured_bev_on_ax  # noqa: E402
 from navsim.visualization.camera import _transform_points_to_image  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
+
+PRINT_W = 6.0  # in: thesis text width 150 mm; fonts 7-8 pt at that size
+plt.rcParams.update({"font.size": 8, "axes.titlesize": 7.5, "legend.fontsize": 6.8, "xtick.labelsize": 7,
+                     "ytick.labelsize": 7})
 
 E = Path(os.environ["NAVSIM_EXP_ROOT"])
 D = Path(os.environ["OPENSCENE_DATA_ROOT"])
@@ -233,19 +238,62 @@ def draw_bev(ax, scene, trajs, cand=None, extra=None, lim=None):
     for label, traj in trajs.items():
         c, ls, lw, zo = STYLE[label]
         pts = densify(traj, 10)
-        ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=lw, zorder=zo, label=label,
+        ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=lw * 0.75, zorder=zo, label=label,
                 solid_capstyle="round")
-        ax.plot(pts[-1, 1], pts[-1, 0], marker="*", markersize=11, color=c, markeredgecolor="white",
-                markeredgewidth=0.7, zorder=zo + 10)  # end point: a stop shows as a star at the ego
+        ax.plot(pts[-1, 1], pts[-1, 0], marker="*", markersize=7.5, color=c, markeredgecolor="white",
+                markeredgewidth=0.5, zorder=zo + 10)  # end point: a stop shows as a star at the ego
     for label, (traj, c, ls) in (extra or {}).items():
         pts = densify(traj, 10)
-        ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=1.8, zorder=27, label=label)
-        ax.plot(pts[-1, 1], pts[-1, 0], marker="*", markersize=9, color="white", markeredgecolor=c, zorder=37)
+        ax.plot(pts[:, 1], pts[:, 0], color=c, linestyle=ls, linewidth=1.3, zorder=27, label=label)
+        ax.plot(pts[-1, 1], pts[-1, 0], marker="*", markersize=7, color="white", markeredgecolor=c, zorder=37)
     ax.set_aspect("equal")
     ax.set_xlim(lim[1], lim[0])  # left = +y
     ax.set_ylim(lim[2], lim[3])
     ax.set_xticks([])
     ax.set_yticks([])
+
+
+AGENT_COLORS = {"vehicle": "#699CDB", "pedestrian": "#b07aa1", "bicycle": "#E38C47"}  # NAVSIM BEV colours
+
+
+def draw_future_agents(ax, scene, times=(1.0, 2.0, 3.0, 4.0)):
+    """Moving agents at +1 ... +4 s (fading dashed outlines) in the current ego frame: makes collisions with agents that
+    are not yet next to the ego at t visible."""
+    h = scene.scene_metadata.num_history_frames - 1
+    pc = np.array(scene.frames[h].ego_status.ego_pose, dtype=float)
+    for k, t in enumerate(times):
+        i = h + int(round(t / 0.5))
+        if i >= len(scene.frames):
+            break
+        f = scene.frames[i]
+        pf = np.array(f.ego_status.ego_pose, dtype=float)
+        for b, n in zip(f.annotations.boxes, f.annotations.names):
+            col = AGENT_COLORS.get(n)
+            if col is None:
+                continue
+            x, y, hd = to_frame(np.array([[b[0], b[1], b[6]]], dtype=float), pf, pc)[0]
+            L, W = b[3], b[4]
+            cx = np.array([L, L, -L, -L, L]) / 2
+            cy = np.array([W, -W, -W, W, W]) / 2
+            px, py = x + np.cos(hd) * cx - np.sin(hd) * cy, y + np.sin(hd) * cx + np.cos(hd) * cy
+            ax.plot(py, px, color=col, linewidth=0.7, linestyle=(0, (2, 1.4)), alpha=0.75 - 0.15 * k, zorder=15)
+
+
+def map_legend_handles(future=True):
+    """Legend entries for the BEV map and agent colours (navsim/visualization/config.py)."""
+    h = [Patch(facecolor="#D3D3D3", label="road"), Patch(facecolor="#d4d19e", label="walkway"),
+         Patch(facecolor="#b9d3b4", label="car park"), Patch(facecolor="#b07aa1", alpha=0.3, label="crosswalk"),
+         plt.Line2D([], [], color="#666666", linestyle="--", linewidth=0.8, label="lane centreline"),
+         Patch(facecolor="#699CDB", edgecolor="black", linewidth=0.5, label="vehicle"),
+         Patch(facecolor="#b07aa1", edgecolor="black", linewidth=0.5, label="pedestrian"),
+         Patch(facecolor="#E38C47", edgecolor="black", linewidth=0.5, label="bicycle"),
+         Patch(facecolor="#edc948", edgecolor="black", linewidth=0.5, label="static object"),
+         Patch(facecolor="#DE7061", edgecolor="black", linewidth=0.5, label="ego vehicle")]
+    if future:
+        h.append(plt.Line2D([], [], color="#699CDB", linestyle=(0, (2, 1.4)), linewidth=0.8,
+                            label="agents at +1 … +4 s (fading)"))
+    h.append(plt.Line2D([], [], color="0.3", marker="*", linestyle="", markersize=7, label="end point"))
+    return h
 
 
 def fmt_scores(row):
@@ -331,11 +379,11 @@ def select_rules(scores, human, rules, rng, n_top, n_rand, log_of):
     return out
 
 
-def three_cameras(axes, frame, trajs, dotted=None):
+def three_cameras(axes, frame, trajs, dotted=None, cams=("cam_l0", "cam_f0", "cam_r0")):
     """Front-left, front, front-right cameras with the trajectories projected (each where that camera sees it) and
     their end points as stars; dotted: {label: (traj, colour)} drawn dotted (e.g. the plan of t - 0.5 s)."""
     z = ground_z(frame)
-    for ax, name in zip(axes, ["cam_l0", "cam_f0", "cam_r0"]):
+    for ax, name in zip(axes, cams):
         draw_camera(ax, frame, trajs, cam_name=name)
         cam = getattr(frame.cameras, name)
         h, w = cam.image.shape[:2]
@@ -380,21 +428,25 @@ def run_rules(args):
             tr = {k: tr[k] for k in RULE5}
             hum = scene.get_future_trajectory().poses
             lim = bev_extent({"human": hum, **tr})
-            fig = plt.figure(figsize=(20, 7.6))
-            gs = fig.add_gridspec(2, 6, height_ratios=[0.55, 1.0], hspace=0.22, wspace=0.03)
-            top = gs[0, :].subgridspec(1, 3, wspace=0.01)
-            cam_axes = [fig.add_subplot(top[0, k]) for k in range(3)]
-            three_cameras(cam_axes, frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]})
-            same = {k: [j for j in list(tr)[: list(tr).index(k)] if np.abs(tr[j] - tr[k]).max() < 1e-3] for k in tr}
-            for j, (k, traj) in enumerate(tr.items()):
-                ax = fig.add_subplot(gs[1, j])
-                draw_bev(ax, scene, {"human": hum, k: traj}, None, lim=lim)
-                ax.set_title(f"{SHORT[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}", fontsize=9.5,
+            fig = plt.figure(figsize=(PRINT_W, 7.0))
+            gs = fig.add_gridspec(4, 3, height_ratios=[0.85, 1.0, 1.0, 0.36], hspace=0.30, wspace=0.04)
+            cam = fig.add_subplot(gs[0, :].subgridspec(1, 3, width_ratios=[0.12, 0.76, 0.12])[0, 1])
+            three_cameras([cam], frame, {"human": hum, "mixture + EC n64": tr["mixture + EC n64"]}, cams=("cam_f0",))
+            cam.set_title("")
+            order = ["argmax", "heads", "shortlist k256", "mixture λ10", "mixture + EC n64", "shortlist + EC n64"]
+            for j, k in enumerate(order):
+                ax = fig.add_subplot(gs[1 + j // 3, j % 3])
+                draw_bev(ax, scene, {"human": hum, k: tr[k]}, None, lim=lim)
+                draw_future_agents(ax, scene)
+                ax.set_title(f"{SHORT[k]}\nEPDMS {fmt_scores(scores[k].loc[tok])}",
                              color="#b00000" if scores[k].loc[tok, "score"] < 0.5 else "black")
-            fig.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8)],
-                       [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"], loc="lower center", fontsize=10,
-                       frameon=False)
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.955, bottom=0.06)
+            lax = fig.add_subplot(gs[3, :])
+            lax.axis("off")
+            lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + map_legend_handles(),
+                       [f"human (logged): EPDMS {fmt_scores(human.loc[tok])}"] +
+                       [h.get_label() for h in map_legend_handles()], loc="center", ncol=4, frameon=False,
+                       handlelength=1.6, columnspacing=1.0)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.985, bottom=0.005)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
@@ -494,33 +546,36 @@ def run_consecutive(args):
             prev_in = {k: to_frame(trp[k], pp, pc) for k in names}
             hum = scene.get_future_trajectory().poses
             lim = bev_extent({"human": hum, **{k: tr[k] for k in names}}, {k: (v, "k", ":") for k, v in prev_in.items()})
-            fig = plt.figure(figsize=(17, 13.2))
-            gs = fig.add_gridspec(3, 4, height_ratios=[0.62, 1.0, 1.0], hspace=0.22, wspace=0.03)
-            top = gs[0, :].subgridspec(1, 3, wspace=0.01)
-            k_main = "mixture + EC n64"  # cameras: the final navtest rule in every figure
-            three_cameras([fig.add_subplot(top[0, j]) for j in range(3)], scene.frames[3], {"human": hum, k_main: tr[k_main]},
-                          dotted={"prev": (prev_in[k_main], STYLE[k_main][0])})
-            row_txt = []
-            for r, keys in enumerate(CONSEC_ROWS):
+            fig = plt.figure(figsize=(PRINT_W, 7.3))
+            gs = fig.add_gridspec(3, 3, hspace=0.38, wspace=0.04)
+            grid = [["argmax", "shortlist k256", "mixture λ10"],
+                    ["argmax + EC n64", "shortlist + EC n64", "mixture + EC n64"], ["heads", "human", None]]
+            for r, keys in enumerate(grid):
                 for j, k in enumerate(keys):
-                    ax = fig.add_subplot(gs[1 + r, j])
-                    col = STYLE[k][0]
-                    draw_bev(ax, scene, {"human": hum, k: tr[k]}, extra={"t − 0.5 s": (prev_in[k], col, ":")}, lim=lim)
-                    row = scores[k].loc[tok]
+                    if k is None:
+                        continue
+                    ax = fig.add_subplot(gs[r, j])
+                    if k == "human":
+                        hum_prev = to_frame(loader2.get_scene_from_token(prev).get_future_trajectory().poses, pp, pc)
+                        draw_bev(ax, scene, {"human": hum}, extra={"t − 0.5 s": (hum_prev, "0.35", ":")}, lim=lim)
+                        row, name = human.loc[tok], "Human (logged)"
+                        jm = float(np.linalg.norm(hum_prev[-1, :2] - hum[-1, :2]))
+                    else:
+                        draw_bev(ax, scene, {"human": hum, k: tr[k]}, extra={"t − 0.5 s": (prev_in[k], STYLE[k][0], ":")},
+                                 lim=lim)
+                        row, name = scores[k].loc[tok], SHORT[k]
+                        jm = float(np.linalg.norm(prev_in[k][-1, :2] - tr[k][-1, :2]))
                     passed = row["two_frame_extended_comfort"] == 1
-                    jm = float(np.linalg.norm(prev_in[k][-1, :2] - tr[k][-1, :2]))
-                    ax.set_title(f"{SHORT[k]}: EC {'pass' if passed else 'fail'}, moved {jm:.1f} m\n"
-                                 f"EPDMS {fmt_scores(row)}", fontsize=9.5, color="black" if passed else "#b00000")
-                    row_txt.append(f"{'pass' if passed else 'fail'} / {jm:.1f} m")
-            ax = fig.add_subplot(gs[2, 3])
-            hum_prev = to_frame(loader2.get_scene_from_token(prev).get_future_trajectory().poses, pp, pc)
-            draw_bev(ax, scene, {"human": hum}, extra={"t − 0.5 s": (hum_prev, "0.35", ":")}, lim=lim)
-            hrow = human.loc[tok]
-            hpass = hrow["two_frame_extended_comfort"] == 1
-            ax.set_title(f"Human (logged): EC {'pass' if hpass else 'fail'}, moved "
-                         f"{np.linalg.norm(hum_prev[-1, :2] - hum[-1, :2]):.1f} m\nEPDMS {fmt_scores(hrow)}",
-                         fontsize=9.5, color="black" if hpass else "#b00000")
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.965, bottom=0.01)
+                    ax.set_title(f"{name}\nEC {'pass' if passed else 'fail'}, moved {jm:.1f} m · EPDMS {row['score']:.2f}",
+                                 color="black" if passed else "#b00000")
+            lax = fig.add_subplot(gs[2, 2])
+            lax.axis("off")
+            lines = [plt.Line2D([], [], color="0.2", linewidth=1.4), plt.Line2D([], [], color="0.2", linestyle=":", linewidth=1.4),
+                     plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)]
+            lax.legend(lines + map_legend_handles(future=False),
+                       ["plan at t", "plan at t − 0.5 s", "human (logged)"] + [h.get_label() for h in map_legend_handles(future=False)],
+                       loc="center", ncol=1, frameon=False, handlelength=1.6, labelspacing=0.35)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.945, bottom=0.01)
             f = out_root / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)
@@ -549,7 +604,7 @@ def main():
     p.add_argument("--n-top", type=int, default=4)
     p.add_argument("--n-random", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--dpi", type=int, default=300)
     args = p.parse_args()
     {"rules": run_rules, "consecutive": run_consecutive}[args.figure](args)
 

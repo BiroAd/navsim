@@ -26,12 +26,12 @@ from navsim.agents.vision_llm_lora.vision_llm_lora_agent import select_trajector
 from navsim.agents.vision_llm_lora.vision_llm_lora_precomputed_agent import load_predictions  # noqa: E402
 
 STAGES = [  # key, title, prediction folder, selection, per-scene score folder, colour
-    ("s1_policy", "Stage 1 (frozen backbone): policy", "p1d_total_ep10", "argmax", "p1d_total_ep10_argmax", "#8c564b"),
-    ("s1_heads", "Stage 1 (frozen backbone): heads", "p1d_total_ep10", "score_heads", "p1d_total_ep10_score_heads", "#e377c2"),
-    ("s2", "Stage 2 (LoRA fine-tuning): heads", "p3_aux_ep05", "score_heads", "p3_aux_ep05_score_heads", "#ff7f0e"),
-    ("s3", "Stage 3 (policy head): shortlist", "p3_aux_policy_ep03", "shortlist", "p3_aux_policy_ep03_shortlist_k256",
+    ("s1_policy", "Stage 1, frozen backbone: policy", "p1d_total_ep10", "argmax", "p1d_total_ep10_argmax", "#8c564b"),
+    ("s1_heads", "Stage 1, frozen backbone: heads", "p1d_total_ep10", "score_heads", "p1d_total_ep10_score_heads", "#e377c2"),
+    ("s2", "Stage 2, LoRA fine-tuning: heads", "p3_aux_ep05", "score_heads", "p3_aux_ep05_score_heads", "#ff7f0e"),
+    ("s3", "Stage 3, policy head: shortlist", "p3_aux_policy_ep03", "shortlist", "p3_aux_policy_ep03_shortlist_k256",
      "#2ca02c"),
-    ("s4", "Stage 4 (RL): mixture + consistency", None, None, "rl3_b0.005_ep01_own_ecseq_mix10_n64_argmax", "#d62728"),
+    ("s4", "Stage 4, RL: mixture + consistency", None, None, "rl3_b0.005_ep01_own_ecseq_mix10_n64_argmax", "#d62728"),
 ]
 
 
@@ -41,7 +41,7 @@ def main():
     p.add_argument("--out-dir", type=Path, required=True)
     p.add_argument("--n", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--dpi", type=int, default=150)
+    p.add_argument("--dpi", type=int, default=300)
     args = p.parse_args()
     scores = {k: pq.per_scene(sc) for k, _, _, _, sc, _ in STAGES}
     human = pq.per_scene("human_agent_non_reactive", suffix="")
@@ -92,20 +92,24 @@ def main():
             for s in STAGES:
                 pq.STYLE[s[0]] = (s[5], "-", 2.2, 28)
             lim = pq.bev_extent({"human": hum, **plans})
-            fig = plt.figure(figsize=(20, 7.6))
-            gs = fig.add_gridspec(2, len(STAGES), height_ratios=[0.55, 1.0], hspace=0.22, wspace=0.03)
-            top = gs[0, :].subgridspec(1, 3, wspace=0.01)
-            pq.three_cameras([fig.add_subplot(top[0, j]) for j in range(3)], frame, {"human": hum, "s4": plans["s4"]})
+            fig = plt.figure(figsize=(pq.PRINT_W, 6.6))
+            gs = fig.add_gridspec(3, 3, height_ratios=[0.85, 1.0, 1.0], hspace=0.30, wspace=0.04)
+            cam = fig.add_subplot(gs[0, :].subgridspec(1, 3, width_ratios=[0.12, 0.76, 0.12])[0, 1])
+            pq.three_cameras([cam], frame, {"human": hum, "s4": plans["s4"]}, cams=("cam_f0",))
+            cam.set_title("")
             for j, s in enumerate(STAGES):
-                ax = fig.add_subplot(gs[1, j])
+                ax = fig.add_subplot(gs[1 + j // 3, j % 3])
                 pq.draw_bev(ax, scene, {"human": hum, s[0]: plans[s[0]]}, None, lim=lim)
+                pq.draw_future_agents(ax, scene)
                 row = scores[s[0]].loc[tok]
-                ax.set_title(f"{s[1]}\nEPDMS {pq.fmt_scores(row)}", fontsize=9.5,
-                             color="#b00000" if row["score"] < 0.5 else "black")
-            fig.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.8)],
-                       [f"human (logged): EPDMS {pq.fmt_scores(human.loc[tok])}"], loc="lower center", fontsize=10,
-                       frameon=False)
-            fig.subplots_adjust(left=0.01, right=0.99, top=0.955, bottom=0.06)
+                ax.set_title(f"{s[1]}\nEPDMS {pq.fmt_scores(row)}", color="#b00000" if row["score"] < 0.5 else "black", fontsize=7)
+            lax = fig.add_subplot(gs[2, 2])
+            lax.axis("off")
+            lax.legend([plt.Line2D([], [], color="black", linestyle="--", linewidth=1.4)] + pq.map_legend_handles(),
+                       [f"human (logged): EPDMS {pq.fmt_scores(human.loc[tok])}"] +
+                       [h.get_label() for h in pq.map_legend_handles()], loc="center", ncol=1, frameon=False,
+                       handlelength=1.6, labelspacing=0.3)
+            fig.subplots_adjust(left=0.01, right=0.99, top=0.985, bottom=0.01)
             f = args.out_dir / cat / f"{i:02d}_{tok}.png"
             fig.savefig(f, dpi=args.dpi)
             plt.close(fig)

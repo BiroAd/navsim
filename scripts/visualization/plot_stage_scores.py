@@ -75,7 +75,8 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
     bench = [("v2", "navtest v2 (EPDMS)"), ("v1", "navtest v1 (PDMS)"), ("hard", "navhard (EPDMS)")]
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.0))
+    plt.rcParams.update({"font.size": 8})
+    fig, axes = plt.subplots(1, 3, figsize=(6.0, 2.6))
     rows = []
     for ax, (b, title) in zip(axes, bench):
         for path, col, lab, dx in [("aux", AUX, "with auxiliary losses", -0.06), ("heads", HEADS, "without auxiliary losses", 0.06)]:
@@ -86,25 +87,28 @@ def main():
                 sd.append(vals.std(ddof=1))
                 rows.append((b, path, st, vals.mean(), vals.std(ddof=1)))
             x = np.array([1, 2, 3, 4]) + np.r_[0, [dx] * 3]
-            ax.errorbar(x, m, yerr=sd, color=col, linewidth=2.0, marker="o", markersize=6, capsize=3,
+            ax.errorbar(x, m, yerr=sd, color=col, linewidth=1.4, marker="o", markersize=3.5, capsize=2, elinewidth=0.9,
                         markeredgecolor="white", label=lab)
-        ax.plot([2], [IMIT[b]], marker="D", markersize=7, color="white", markeredgecolor=MUTED, markeredgewidth=1.5,
+        ax.plot([2], [IMIT[b]], marker="D", markersize=4.5, color="white", markeredgecolor=MUTED, markeredgewidth=1.1,
                 linestyle="", label="imitation only (stage 2 without score losses)")
-        ax.set_xticks([1, 2, 3, 4], ["Stage 1\nscore heads\n(frozen backbone)", "Stage 2\nLoRA fine-tuning",
-                                     "Stage 3\npolicy head", "Stage 4\nRL fine-tuning"], fontsize=8.5)
-        ax.set_title(title, fontsize=10, color=INK, loc="left")
+        ax.set_xticks([1, 2, 3, 4], ["1", "2", "3", "4"], fontsize=7)
+        ax.set_xlabel("training stage", fontsize=7, color=MUTED)
+        ax.set_title(title, fontsize=8, color=INK, loc="left")
         ax.grid(True, axis="y", color="#e6e5e1", linewidth=0.6)
         ax.set_axisbelow(True)
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
-        ax.tick_params(colors=MUTED, labelsize=8)
+        ax.tick_params(colors=MUTED, labelsize=6.5)
     h, l = axes[0].get_legend_handles_labels()
     order = [l.index("with auxiliary losses"), l.index("without auxiliary losses"),
              l.index("imitation only (stage 2 without score losses)")]
-    fig.legend([h[i] for i in order], [l[i] for i in order], loc="lower center", ncol=3, fontsize=9, frameon=False)
-    fig.tight_layout(rect=(0, 0.07, 1, 1))
+    fig.legend([h[i] for i in order], [l[i] for i in order], loc="lower center", ncol=3, fontsize=7, frameon=False,
+               bbox_to_anchor=(0.5, 0.06))
+    fig.text(0.5, 0.015, "training stage: 1 frozen backbone · 2 LoRA fine-tuning · 3 policy head · 4 RL fine-tuning",
+             ha="center", fontsize=7, color=MUTED)
+    fig.tight_layout(rect=(0, 0.14, 1, 1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(args.out, dpi=170)
+    fig.savefig(args.out, dpi=300)
     print(args.out)
     print(f"stage 1: {S1}; imitation only: {IMIT}")
     for r in rows:
