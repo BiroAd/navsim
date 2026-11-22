@@ -51,6 +51,8 @@ def hard(name):
 
 S1 = {"v2": v2("p1d_total_ep10_argmax"), "v1": v1("p1d_total_ep10_score_heads_v1"),
       "hard": hard("p1d_total_ep10_score_heads")}
+IMIT = {"v2": v2("p3_imitation_ep07_argmax"), "v1": v1("p3_imitation_ep07_argmax"),
+        "hard": hard("p3_imitation_ep07_argmax")}  # stage 2 trained by imitation only (no score losses), same start
 PATHS = {
     "aux": {2: ["p3_aux_ep05", "p3_aux_s1_ep06", "p3_aux_s2_ep05", "p3_aux_s3_ep06"],
             3: ["p3_aux_policy_ep03", "p3_aux_policy_s1_ep01", "p3_aux_policy_s2_ep02", "p3_aux_policy_s3_ep02"],
@@ -86,6 +88,8 @@ def main():
             x = np.array([1, 2, 3, 4]) + np.r_[0, [dx] * 3]
             ax.errorbar(x, m, yerr=sd, color=col, linewidth=2.0, marker="o", markersize=6, capsize=3,
                         markeredgecolor="white", label=lab)
+        ax.plot([2], [IMIT[b]], marker="D", markersize=7, color="white", markeredgecolor=MUTED, markeredgewidth=1.5,
+                linestyle="", label="imitation only (stage 2 without score losses)")
         ax.set_xticks([1, 2, 3, 4], ["Stage 1\nscore heads\n(frozen backbone)", "Stage 2\nLoRA fine-tuning",
                                      "Stage 3\npolicy head", "Stage 4\nRL fine-tuning"], fontsize=8.5)
         ax.set_title(title, fontsize=10, color=INK, loc="left")
@@ -94,12 +98,15 @@ def main():
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
         ax.tick_params(colors=MUTED, labelsize=8)
-    axes[0].legend(fontsize=8, frameon=False, loc="lower right")
-    fig.tight_layout()
+    h, l = axes[0].get_legend_handles_labels()
+    order = [l.index("with auxiliary losses"), l.index("without auxiliary losses"),
+             l.index("imitation only (stage 2 without score losses)")]
+    fig.legend([h[i] for i in order], [l[i] for i in order], loc="lower center", ncol=3, fontsize=9, frameon=False)
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=170)
     print(args.out)
-    print(f"stage 1: {S1}")
+    print(f"stage 1: {S1}; imitation only: {IMIT}")
     for r in rows:
         print(f"{r[0]:4s} {r[1]:5s} stage {r[2]}: {r[3]:.4f} ± {r[4]:.4f}")
 
